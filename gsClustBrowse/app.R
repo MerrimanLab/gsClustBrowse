@@ -1,0 +1,68 @@
+#
+# This is a Shiny web application. You can run the application by clicking
+# the 'Run App' button above.
+#
+# Find out more about building applications with Shiny here:
+#
+#    http://shiny.rstudio.com/
+#
+
+library(shiny)
+library(tidyverse)
+library(dbplyr)
+library(DBI)
+library(odbc)
+library(config)
+
+# get database configuration info from the config.yml file
+dsn <- get("gsint")
+# connect to the database
+con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database , timeout = 10)
+
+onStop(function() {
+    dbDisconnect(con)
+})
+
+# Define UI for application that draws a histogram
+ui <- fluidPage(
+
+    # Application title
+    titlePanel("Browse Intensities"),
+
+    # Sidebar with a slider input for number of bins
+    sidebarLayout(
+        sidebarPanel(
+            radioButtons("filter_by", "Use Marker Name or Position",
+                         c("Marker name","Chr and position")),
+            textInput("markername", label = "Marker name", value = "1KG_1_14106394"),
+            numericInput("chr", label = "Chr", value = 1),
+            numericInput("pos", label = "Position", value = 14106394)
+
+        ),
+
+        # Show a plot of the generated distribution
+        mainPanel(
+            plotOutput("intensityPlot")
+        )
+    )
+)
+
+# Define server logic required to draw a histogram
+server <- function(input, output) {
+    markerinfo_tbl <- tbl(con, "marker_info")
+    combined_tbl <- tbl(con, "combined")
+
+
+
+    output$intensityPlot <- renderPlot({
+        if(input$filter_by == "Marker name"){
+            filtered_data <- combined_tbl %>% filter(name == input$markername)
+        } else { # has to be position
+            filtered_data <- combined_tbl %>% filter(chr == input$chr & position == input$pos)
+        }
+        filtered_data  %>% ggplot(aes(x = x, y = y, colour = gtype)) + geom_point()
+    })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)

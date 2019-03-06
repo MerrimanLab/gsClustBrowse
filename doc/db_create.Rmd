@@ -1,0 +1,132 @@
+---
+title: "DB create and load"
+output: html_document
+---
+
+## Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dbplyr)
+```
+
+Make sure database file exists
+
+```{bash}
+touch ../data/gs_intensities.sqlite
+```
+
+Load the database and connection info
+```{r}
+library(DBI)
+library(odbc)
+library(config)
+dsn <- get("gsint")
+con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database , timeout = 10)
+```
+
+## Setup the database
+
+The main design of the database is 3 tables: the main data table, 
+
+### Create tables
+
+
+Create the table for the markers
+```{sql, connection = con}
+CREATE TABLE IF NOT EXISTS "marker_info" (
+  "markerid" INTEGER NOT NULL,
+  "name" TEXT NOT NULL,
+  "address" INTEGER,
+  "chr" INTEGER NOT NULL,
+  "position" INTEGER NOT NULL,
+  primary key (chr, position, name)
+);
+
+```
+
+create the table to store the info about the samples
+```{sql, connection = con}
+CREATE TABLE IF NOT EXISTS "batch"(
+  "sampleid" CHAR NOT NULL,
+  "batchid" INTEGER NOT NULL,
+  "sex" CHAR,
+  primary key (sampleid, batchid)
+)
+;
+```
+
+
+create the main data table
+```{sql, connection = con}
+CREATE TABLE IF NOT EXISTS "intensities"(
+  "markerid" INTEGER NOT NULL,
+  "sampleid" CHAR NOT NULL,
+  "gtype" CHAR,
+  "x_raw" REAL,
+  "x" REAL,
+  "y_raw" REAL,
+  "y" REAL,
+  FOREIGN KEY ("markerid") REFERENCES marker_info("markerid"),
+  FOREIGN KEY ("sampleid") REFERENCES batch("sampleid")
+);
+```
+
+
+## Data load
+
+Load in the test data to R
+```{r}
+gs_tab <- read_delim(file = "~/Git_repos/gsQCplot/data/gs_export_table.txt",delim = '\t', n_max = 100) %>% set_names(., nm = str_replace(colnames(.), " ", "_")) %>% select(Index, Name, Address, Chr, Position, GenTrain_Score, starts_with("Frac_"), ends_with("GType"), ends_with(".X_Raw"), ends_with(".X"), ends_with(".Y_Raw"), ends_with("Y"))
+```
+
+```{r}
+marker_info <- gs_tab %>% select(markerid = Index,name = Name, address = Address, chr = Chr, position = Position) %>% mutate_if(is.numeric, as.integer)
+```
+
+```{r}
+db_insert_into(con, "marker_info", marker_info)
+```
+
+check markers were inserted
+```{sql, connection = con}
+SELECT * from marker_info limit 5;
+```
+
+make the samples into long format for the db
+
+```{r}
+suffixes <- c("GType", "X_Raw","X","Y_Raw","Y")
+names(suffixes) <- suffixes
+```
+
+
+```{r}
+gs_long <- purrr::map(suffixes, ~ gs_tab %>% select(Index, ends_with(paste0(".",.x))) %>% gather("sample", !!.x , ends_with(paste0(".", .x))) %>% mutate(sample = str_remove(sample, paste0("\\.",.x ))) )
+
+```
+
+
+join the results back together
+```{r}
+gs_long_combined <- purrr::reduce(gs_long, left_join, by = c("Index", "sample"))
+
+```
+
+populate the batch table with the sample info
+```{r}
+batch <- gs_long_combined %>% select(sampleid = sample) %>% mutate(batchid = 1, sex = NA) %>% distinct()
+db_insert_into(con, "batch", batch)
+```
+
+
+
+```{r}
+db_insert_into(con, "intensities", gs_long_combined %>% select(markerid = Index, sampleid = sample, gtype = GType, x_raw = X_Raw, x = X, y_raw = Y_Raw, y = Y))
+```
+
+```{sql, connection = con}
+CREATE VIEW combined AS SELECT intensities.*, marker_info.name, marker_info.chr, marker_info.position FROM intensities LEFT JOIN marker_info on intensities.markerid = marker_info.markerid
+```
+
