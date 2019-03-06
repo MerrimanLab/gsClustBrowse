@@ -52,7 +52,8 @@ ui <- fluidPage(
             tabPanel(title = "Marker Table",
                      mainPanel(
                          numericInput("markerinfo_chr", value = 1, min = 1, label = "Chr"),
-                         dataTableOutput("marker_info")
+                         dataTableOutput("markerinfo"),
+                         verbatimTextOutput(outputId = "cell")
                      )
             )
         )
@@ -69,28 +70,37 @@ server <- function(input, output) {
     combined_tbl <- tbl(con, "combined")
 
     # return the marker table from the db so that markers can be browsed
-    output$marker_info <- renderDataTable(
+    output$markerinfo <- renderDataTable(
         datatable({markerinfo_tbl %>%
-            select(chr, position, name) %>%
-            filter(chr == input$markerinfo_chr) %>%
-            arrange(position) %>%
-            as_tibble() }))
+                select(chr, position, name) %>%
+                filter(chr == input$markerinfo_chr) %>%
+                arrange(position) %>%
+                as_tibble() }, selection = list( target = "cell"),
+                rownames = FALSE))
 
     filtered_data <- reactive(
         if(input$filter_by == "Marker name"){
-        combined_tbl %>% filter(name == input$markername) %>% as_tibble()
-    } else { # has to be position
-        combined_tbl %>% filter(chr == input$chr & position == input$pos) %>% as_tibble()
-    }
+            combined_tbl %>% filter(name == input$markername) %>% as_tibble()
+        } else { # has to be position
+            combined_tbl %>% filter(chr == input$chr & position == input$pos) %>% as_tibble()
+        }
     )
 
     # PLot of the intensities for the chosen marker
     output$intensityPlot <- renderPlot({
-
-
         plot_title <- filtered_data()[["name"]][1]
         filtered_data()  %>% ggplot(aes(x = x, y = y, colour = gtype)) + geom_point() + ggtitle(plot_title)
     })
+
+    observeEvent(input$markerinfo_cell_clicked, {
+
+        cell <- input$markerinfo_cell_clicked
+        if(!is.null(cell$value)){
+            output$cell <- renderPrint(cell)
+        }
+    })
+
+
 }
 
 # Run the application
