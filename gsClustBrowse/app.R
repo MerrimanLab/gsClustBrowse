@@ -76,14 +76,20 @@ server <- function(input, output) {
             arrange(position) %>%
             as_tibble() }))
 
+    filtered_data <- reactive(
+        if(input$filter_by == "Marker name"){
+        combined_tbl %>% filter(name == input$markername) %>% as_tibble()
+    } else { # has to be position
+        combined_tbl %>% filter(chr == input$chr & position == input$pos) %>% as_tibble()
+    }
+    )
+
     # PLot of the intensities for the chosen marker
     output$intensityPlot <- renderPlot({
-        if(input$filter_by == "Marker name"){
-            filtered_data <- combined_tbl %>% filter(name == input$markername)
-        } else { # has to be position
-            filtered_data <- combined_tbl %>% filter(chr == input$chr & position == input$pos)
-        }
-        filtered_data  %>% ggplot(aes(x = x, y = y, colour = gtype)) + geom_point()
+
+
+        plot_title <- filtered_data()[["name"]][1]
+        filtered_data()  %>% ggplot(aes(x = x, y = y, colour = gtype)) + geom_point() + ggtitle(plot_title)
     })
 }
 
