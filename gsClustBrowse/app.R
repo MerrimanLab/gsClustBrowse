@@ -65,26 +65,28 @@ ui <- fluidPage(
 # Define server logic required to draw a histogram
 server <- function(input, output) {
     # marker table
-    markerinfo_tbl <- tbl(con, "marker_info")
+    markerinfo_tbl <- reactive(tbl(con, "marker_info") %>%  select(chr, position, name) %>%
+                                   filter(chr == input$markerinfo_chr) %>%
+                                   arrange(position) #%>% as_tibble()
+    )
     # joined dataset
     combined_tbl <- tbl(con, "combined")
 
     # return the marker table from the db so that markers can be browsed
     output$markerinfo <- renderDataTable(
-        datatable({markerinfo_tbl %>%
-                select(chr, position, name) %>%
-                filter(chr == input$markerinfo_chr) %>%
-                arrange(position) %>%
-                as_tibble() }, selection = list( target = "cell"),
-                rownames = FALSE))
+        datatable({markerinfo_tbl() %>% collect()}, selection = list( target = "row"),
+                  rownames = FALSE))
 
-    filtered_data <- reactive(
+    filtered_data <- reactive({
+        coords <- c(chr = input$chr, pos = input$pos)
+
         if(input$filter_by == "Marker name"){
-            combined_tbl %>% filter(name == input$markername) %>% as_tibble()
-        } else { # has to be position
-            combined_tbl %>% filter(chr == input$chr & position == input$pos) %>% as_tibble()
-        }
-    )
+            tmp_coords <- markerinfo_tbl() %>% filter(name == input$markername) %>% collect()
+            #coords <- c(chr = tmp_coords$chr[[1]], pos = tmp_coords$pos[[1]])
+        } # has to be position
+        combined_tbl %>% filter(chr == coords[["chr"]] & position == coords[["pos"]]) %>% as_tibble()
+
+    })
 
     # PLot of the intensities for the chosen marker
     output$intensityPlot <- renderPlot({
@@ -96,8 +98,10 @@ server <- function(input, output) {
 
         cell <- input$markerinfo_cell_clicked
         if(!is.null(cell$value)){
-            output$cell <- renderPrint(cell)
-        }
+            if(colnames(markerinfo_tbl())[[cell$col +1 ]] == "name"){
+
+                output$cell <- renderPrint(cell)
+            }}
     })
 
 
