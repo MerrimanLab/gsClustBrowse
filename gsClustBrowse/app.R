@@ -20,6 +20,9 @@ dsn <- get("gsint")
 # connect to the database
 con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database , timeout = 10)
 
+pops <- c("East Polynesian","West Polynesian", "European", "Asian")
+batch <- 1:13
+
 onStop(function() {
     dbDisconnect(con)
 })
@@ -29,21 +32,31 @@ ui <- fluidPage(
 
     # Application title
     titlePanel("Browse Intensities"),
+    sidebarPanel(
+        h3("Filter Markers"),
+        numericInput("markerinfo_chr", value = 1, min = 1, label = "Chr"),
+        numericInput("markerinfo_start", value = 1, min = 1, label = "Start"),
+        numericInput("markerinfo_end", value = 1e6, min = 1, label = "End"),
+        hr(),
+        p("Currently not 'plugged-in:'"),
+        h3("Filter Data"),
+        radioButtons("sex_filter", label = "Sex", choices = list(All = "all", Male = "male", Female = "female")  ),
+        selectInput("ancestry_filter", label = "Ancestry", choices = pops, selected = NULL, multiple = TRUE),
+        selectInput("batch_filter", label = "QC Batch", choices = batch, selected = NULL, multiple = TRUE),
 
+        h3("Plot Options"),
+        checkboxGroupInput("plot_options", label = "Facet By", choices = c("Ancestry", "Batch", "Sex"))
+    ),
 
     mainPanel(
-         numericInput("markerinfo_chr", value = 1, min = 1, label = "Chr"),
-                  numericInput("markerinfo_start", value = 1, min = 1, label = "Start"),
-                  numericInput("markerinfo_end", value = 1e6, min = 1, label = "End"),
 
-        dataTableOutput("markerinfo"),
+        p("Click on a marker name"),
+        fluidRow(
+            dataTableOutput("markerinfo")),
         #dataTableOutput("testTable")
-        plotOutput("intensityPlot")
-
-
-
-
-
+        fluidRow(
+            plotOutput("intensityPlot")
+        )
     )
 )
 
@@ -52,15 +65,17 @@ ui <- fluidPage(
 server <- function(input, output) {
     # marker table
     markerinfo_tbl <- reactive(tbl(con, "marker_info") %>%  select(chr, position, name) %>%
-                                   filter(chr == input$markerinfo_chr, between(position, input$markerinfo_start, input$markerinfo_end)) %>%
+                                   filter(chr == input$markerinfo_chr, between(position, input$markerinfo_start, input$markerinfo_end)) %>%  select(name, chr, position) %>%
                                    arrange(position) #%>% as_tibble()
     )
     # joined dataset
     combined_tbl <- tbl(con, "combined")
+    #coord <- str_replace_all(input$coord, "-|:", " ") %>% str_split(., " ") %>% unlist() %>% set_names(., c("chr", "start", "end"))
+
 
     # return the marker table from the db so that markers can be browsed
     output$markerinfo <- renderDataTable(
-        datatable({markerinfo_tbl() %>% collect()}, selection = list( target = "row"),
+        datatable({markerinfo_tbl() %>%collect()}, selection = list( target = "row", mode = "single"),
                   rownames = FALSE))
 
     filtered_data <- reactive({
@@ -88,7 +103,7 @@ server <- function(input, output) {
     output$intensityPlot <- renderPlot({
         dat <- filtered_data()
         plot_title <- dat[["name"]][1]
-        filtered_data()  %>% ggplot(aes(x = x, y = y, colour = gtype)) + geom_point() #+ ggtitle(plot_title)
+        filtered_data()  %>% ggplot(aes(x = x, y = y, colour = gtype)) + geom_point() + ggtitle(plot_title) + theme_bw() + expand_limits(x = c(0,1), y = c(0,1))
     })
 
     observeEvent(input$markerinfo_cell_clicked, {
