@@ -23,6 +23,9 @@ con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database , tim
 pops <- c("East Polynesian","West Polynesian", "European", "Asian")
 batch <- 1:13
 
+# define genotype colour scale
+gt_colours <- scale_color_manual( values=c("NC" = "grey", "BB" = "green", "AB" = "blue", "AA" ="red"))
+
 onStop(function() {
     dbDisconnect(con)
 })
@@ -45,6 +48,7 @@ ui <- fluidPage(
         selectInput("batch_filter", label = "QC Batch", choices = batch, selected = NULL, multiple = TRUE),
 
         h3("Plot Options"),
+        radioButtons("coord_options", label = "Axes", choices = list(`Theta/R` = "theta_r", `X/Y` = "xy", `X/Y Raw` = "xy_raw")  ),
         checkboxGroupInput("facet_options", label = "Facet By", choices = c("Ancestry", "Sex")),
         radioButtons("colour_options", label = "Colour", choices = list(GType = "gtype", Sex = "sex", Ancestry = "ancestry")  )
     ),
@@ -102,17 +106,24 @@ server <- function(input, output) {
 
     # PLot of the intensities for the chosen marker
     output$intensityPlot <- renderPlot({
-        dat <- filtered_data()
+        dat <- filtered_data() #%>% mutate(gtype = forcats::as_factor(gtype) %>% forcats::lvls_expand(.,c("AA","AB","BB", "NC")))
 
         if(!is.null(input$batch_filter)){
             dat <- dat %>% filter(batchid %in% input$batch_filter)
         }
 
         plot_title <- dat[["name"]][1]
-        p <- dat  %>% ggplot(aes(x = x, y = y, colour = gtype)) + geom_point() + ggtitle(plot_title) + theme_bw() + expand_limits(x = c(0,1), y = c(0,1))
-        if(length(unique(dat$batchid)) > 1){
-           p <- p + facet_wrap(~ batchid)
+        p <- dat  %>% ggplot(aes(x = theta, y = r, colour = gtype))
+        if(input$coord_options == "xy"){
+            p <-  dat  %>% ggplot(aes(x = x, y = y, colour = gtype))
+        } else if(input$coord_options == "xy_raw"){
+            p <-  dat  %>% ggplot(aes(x = x_raw, y = y_raw, colour = gtype))
         }
+
+        p <- p + geom_point() + ggtitle(plot_title) + theme_bw() + expand_limits(x = c(0,1), y = c(0,1)) + facet_wrap(~ batchid) + gt_colours
+
+
+
         p
     })
 
