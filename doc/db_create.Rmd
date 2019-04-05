@@ -23,7 +23,7 @@ library(DBI)
 library(odbc)
 library(config)
 dsn <- get("gsint")
-con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database , timeout = 10)
+con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database , timeout = 100)
 ```
 
 ## Setup the database
@@ -36,7 +36,6 @@ The main design of the database is 3 tables: the main data table,
 Create the table for the markers
 ```{sql, connection = con}
 CREATE TABLE IF NOT EXISTS "marker_info" (
-  "markerid" INTEGER NOT NULL,
   "name" TEXT NOT NULL,
   "address" INTEGER,
   "chr" CHAR NOT NULL,
@@ -46,53 +45,199 @@ CREATE TABLE IF NOT EXISTS "marker_info" (
 
 ```
 
-create the table to store the info about the samples
+create batch table
 ```{sql, connection = con}
 CREATE TABLE IF NOT EXISTS "batch"(
-  "sampleid" CHAR NOT NULL,
+  "batchid" INTEGER NOT NULL,
+  "chip" CHAR NOT NULL,
+  primary key (batchid)
+)
+;
+
+```
+
+populate the batch info
+```{sql, connection = con}
+INSERT INTO batch (batchid, chip) VALUES(1,'v1.0'), (2,'v1.0');
+```
+
+create the table to store the info about the samples
+```{sql, connection = con}
+CREATE TABLE IF NOT EXISTS "sample"(
+  "sampleid" INTEGER PRIMARY KEY AUTOINCREMENT,
+  "samplecode" CHAR NOT NULL,
   "batchid" INTEGER NOT NULL,
   "sex" CHAR,
   "ancestry" CHAR,
-  primary key (sampleid, batchid)
+  "callrate" REAL,
+  UNIQUE(samplecode, batchid),
+  FOREIGN KEY ("batchid") REFERENCES batch("batchid")
 )
 ;
 ```
 
 
+
+
 create the main data table
 ```{sql, connection = con}
 CREATE TABLE IF NOT EXISTS "intensities"(
-  "markerid" INTEGER NOT NULL,
+  "markername" CHAR NOT NULL,
   "sampleid" CHAR NOT NULL,
   "gtype" CHAR,
   "x_raw" REAL,
   "x" REAL,
   "y_raw" REAL,
   "y" REAL,
-  FOREIGN KEY ("markerid") REFERENCES marker_info("markerid"),
-  FOREIGN KEY ("sampleid") REFERENCES batch("sampleid")
+  'r' REAL,
+  'theta' REAL,
+  UNIQUE(markername,sampleid),
+  FOREIGN KEY ("markername") REFERENCES marker_info("name"),
+  FOREIGN KEY ("sampleid") REFERENCES sample("sampleid")
 );
 ```
 
+```{sql, connection = con}
+CREATE VIEW IF NOT EXISTS combined AS SELECT marker_info.name, marker_info.chr, marker_info.position, sample.samplecode, batch.*, intensities.* FROM intensities 
+  LEFT JOIN marker_info on intensities.markername = marker_info.name 
+  LEFT JOIN sample on sample.sampleid = intensities.sampleid
+  LEFT JOIN batch on sample.batchid = batch.batchid;
+```
 
 ## Data load
 
-Load in the test data to R
+Create variables needed to filter and wrangle data
 ```{r}
-gs_header <- read_delim(file = here::here("data/test10000.txt"), delim = '\t', n_max = 100) %>% slice(0)
-gs_header_spec <- spec(gs_header)
-gs_header_spec$cols$Chr <- col_character()
+# columns to extract for intensities table
+suffixes <- c("GType", "X_Raw","X","Y_Raw","Y", "R", "Theta")
+names(suffixes) <- suffixes
 
-gs_tab <- read_delim(file = here::here("data/test10000.txt"),delim = '\t', col_types = gs_header_spec$cols) %>% set_names(., nm = str_replace(colnames(.), " ", "_")) %>% select(Index, Name, Address, Chr, Position, GenTrain_Score, starts_with("Frac_"), ends_with("GType"), ends_with(".X_Raw"), ends_with(".X"), ends_with(".Y_Raw"), ends_with("Y"))
+# possible values for chromosomes in the markers_info table
+possible_chrs <- c("0","1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "MT", "X", "XY", "Y" )
+
+intensities_colnames <- dbListFields(con, "intensities")
+```
+
+function to process the data as it comes in
+```{r}
+
+def_col_data_type <-function(filename){
+  gs_header <- read_delim(file = filename, delim = '\t', n_max = 100) %>% slice(0)
+  gs_header_spec <- spec(gs_header)
+  gs_header_spec$cols$Chr <- col_character()
+  gs_header_spec
+}
+
+# example
+# def_col_data_type(here::here("data/test10000_batch1.txt"))
+
+update_marker_table <- function(gs_tab){
+  existing_markers <- dbReadTable(con, name = "marker_info")
+  marker_info <- gs_tab %>% filter(Chr %in% possible_chrs) %>% select(name = Name, address = Address, chr = Chr, position = Position) %>% mutate_if(is.numeric, as.integer)
+  DBI::dbWriteTable(con, name = "marker_info", value = anti_join(marker_info, existing_markers, by = c("name","address","chr","position") ) , append = TRUE)
+}
+
+update_sample_table <- function(gs_long_combined, batch){
+  # existing samples
+  existing_samples <- dbReadTable(con, "sample")
+  
+  samples <- gs_long_combined %>% select(samplecode = sample) %>% mutate(batchid = batch, sex = NA, ancestry = NA) %>% distinct()
+ 
+  # create table of new samples to be added
+  if(NROW(existing_samples) > 0){
+   samples_new <- samples %>% anti_join(., existing_samples, by = c("samplecode", "batchid"))
+  } else {
+    samples_new <- samples
+  }
+  if(NROW(samples_new)> 0){
+  # add new samples to db
+  DBI::dbWriteTable(con, name = "sample", value = samples_new, append = TRUE)
+  }
+  
+}
+
+process_chunk <- function(gs_tab, batch){
+  gs_tab <- gs_tab %>% set_names(., nm = str_replace(colnames(.), " ", "_")) %>% select(Index, Name, Address, Chr, Position, GenTrain_Score, starts_with("Frac_"), ends_with("GType"), ends_with(".X_Raw"), ends_with(".X"), ends_with(".Y_Raw"), ends_with("Y"), ends_with(".R"), ends_with(".Theta")) 
+  # extract and write markers into db
+  update_marker_table(gs_tab)
+  message("markers updated")
+  # make sure only adding new samples
+  # make into long format
+  gs_long <- purrr::map(suffixes, ~ gs_tab %>% select(Name, ends_with(paste0(".",.x))) %>% gather("sample", !!.x , ends_with(paste0(".", .x))) %>% mutate(sample = str_remove(sample, paste0("\\.",.x ))) )
+  #join the results back together
+  gs_long_combined <- purrr::reduce(gs_long, left_join, by = c("Name", "sample"))
+  message("in long format")
+  update_sample_table(gs_long_combined, batch)
+  message("samples updated")
+   
+  gs_long_combined %>% 
+    mutate(batchid = batch) %>% 
+    left_join(., tbl(con, "sample") %>% select(samplecode, batchid, sampleid) ,
+              by = c("sample" = "samplecode", "batchid"), 
+              copy = TRUE) %>% 
+    select(markername = Name, 
+           sampleid = sampleid, 
+           gtype = GType, 
+           x_raw = X_Raw, 
+           x = X, 
+           y_raw = Y_Raw, 
+           y = Y, 
+           r = R, 
+           theta = Theta) %>% 
+    arrange(markername) %>% 
+    select(!!dbListFields(con, "intensities")) %>% 
+    write_csv(path = here::here(paste0("data/intensities_batch_",batch,".csv")), 
+              col_names = FALSE, 
+              append = TRUE)
+  message("intensities chunk written")
+}
+
+
 ```
 
 ```{r}
-possible_chrs <- c("0","1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "MT", "X", "XY", "Y" )
+f <- function(gs_tab, pos){
+  process_chunk(gs_tab, batch = 1)
+}
+
+header_spec <- def_col_data_type(here::here("data/test10000_batch1.txt"))
+
+#test <- read_delim(file = here::here("data/test10000_batch1.txt"),delim = '\t', col_types = header_spec$cols,  n_max = 100) 
+
+read_delim_chunked(file = here::here("data/test10000_batch1.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 2000, callback = SideEffectChunkCallback$new(f), progress = TRUE) 
+
+f <- function(gs_tab, pos){
+  process_chunk(gs_tab, batch = 2)
+}
+
+header_spec <- def_col_data_type(here::here("data/test10000_batch2.txt"))
+
+#test <- read_delim(file = here::here("data/test10000_batch1.txt"),delim = '\t', col_types = header_spec$cols,  n_max = 100) 
+
+read_delim_chunked(file = here::here("data/test10000_batch2.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 1000, callback = SideEffectChunkCallback$new(f), progress = TRUE)
+```
+
+
+
+Load in the first 100 rows to get the data types
+```{r}
+gs_header <- read_delim(file = here::here("data/test10000_batch1.txt"), delim = '\t', n_max = 100) %>% slice(0)
+gs_header_spec <- spec(gs_header)
+gs_header_spec$cols$Chr <- col_character()
+```
+
+```{r}
+gs_tab <- read_delim(file = here::here("data/test10000_batch1.txt"),delim = '\t', col_types = gs_header_spec$cols) %>% set_names(., nm = str_replace(colnames(.), " ", "_")) %>% select(Index, Name, Address, Chr, Position, GenTrain_Score, starts_with("Frac_"), ends_with("GType"), ends_with(".X_Raw"), ends_with(".X"), ends_with(".Y_Raw"), ends_with("Y"), ends_with(".R"), ends_with(".Theta"))
+```
+
+
+```{r}
+
 marker_info <- gs_tab %>% filter(Chr %in% possible_chrs) %>% select(markerid = Index,name = Name, address = Address, chr = Chr, position = Position) %>% mutate_if(is.numeric, as.integer)
 ```
 
 ```{r}
-db_insert_into(con, "marker_info", marker_info)
+DBI::dbWriteTable(con, name = "marker_info", value = marker_info, append = TRUE)
 ```
 
 check markers were inserted
@@ -102,10 +247,7 @@ SELECT * from marker_info limit 5;
 
 make the samples into long format for the db
 
-```{r}
-suffixes <- c("GType", "X_Raw","X","Y_Raw","Y")
-names(suffixes) <- suffixes
-```
+
 
 
 ```{r}
@@ -122,17 +264,27 @@ gs_long_combined <- purrr::reduce(gs_long, left_join, by = c("Index", "sample"))
 
 populate the batch table with the sample info
 ```{r}
-batch <- gs_long_combined %>% select(sampleid = sample) %>% mutate(batchid = 1, sex = NA, ancestry = NA) %>% distinct()
-db_insert_into(con, "batch", batch)
+samples <- gs_long_combined %>% select(samplecode = sample) %>% mutate(batchid = 1, sex = NA, ancestry = NA) %>% distinct()
+DBI::dbWriteTable(con, name = "sample", value = samples, append = TRUE)
+```
+
+
+```{r}
+samples_ids <- samples %>% left_join(., tbl(con, "sample") %>% select(samplecode, batchid, sampleid), by = c("samplecode", "batchid"), copy = TRUE)  %>% select(samplecode, sampleid)
+```
+
+```{r}
+gs_long_combined %>% left_join(., samples_ids, by = c("sample" = "samplecode"))%>% select(markerid = Index, sampleid = sampleid, gtype = GType, x_raw = X_Raw, x = X, y_raw = Y_Raw, y = Y, r = R, theta = Theta) %>% arrange(markerid) %>% select(!!dbListFields(con, "intensities")) %>% write_csv(path = here::here("data/intensities_batch_1.csv"), col_names = FALSE)
+```
+
+
+```{r, eval = FALSE}
+DBI::dbWriteTable(con, name = "intensities", value = gs_long_combined %>% left_join(., samples_ids, by = c("sample" = "samplecode"))%>% select(markerid = Index, sampleid = sampleid, gtype = GType, x_raw = X_Raw, x = X, y_raw = Y_Raw, y = Y, r = R, theta = Theta) %>% arrange(markerid), append = TRUE)
 ```
 
 
 
 ```{r}
-db_insert_into(con, "intensities", gs_long_combined %>% select(markerid = Index, sampleid = sample, gtype = GType, x_raw = X_Raw, x = X, y_raw = Y_Raw, y = Y))
-```
-
-```{sql, connection = con}
-CREATE VIEW combined AS SELECT intensities.*, marker_info.name, marker_info.chr, marker_info.position FROM intensities LEFT JOIN marker_info on intensities.markerid = marker_info.markerid
+dbDisconnect(con)
 ```
 
