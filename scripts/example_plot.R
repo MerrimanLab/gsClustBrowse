@@ -5,19 +5,19 @@ library(odbc)
 library(config)
 
 
-# get database configuration info from the config.yml file
+#' get database configuration info from the config.yml file
 dsn <- get("gsint")
-# connect to the database
+#' connect to the database
 con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database , timeout = 10)
 
-# combined is a database view that has the table joins already specified
+#' combined is a database view that has the table joins already specified
 combined_tbl <- tbl(con, "combined")
 
 
-#query intensities for a marker
+#' query intensities for a marker
 combined_tbl %>% filter(name =="1KG_1_14106394") %>% head()
 
-# plot function for a single marker
+#' plot function for a single marker
 plot_intensities <- function(marker){
   combined_tbl %>% filter(name == marker) %>%
     ggplot(aes(x = x, y = y, colour = gtype)) +
@@ -28,9 +28,25 @@ plot_intensities <- function(marker){
 }
 
 
-# plot the intensities for a marker
+#' plot the intensities for a marker
 plot_intensities(marker = "1KG_1_14106394")
 
-# plot multiple markers
+#' plot multiple markers
 markers <- c("1KG_1_14106394", "exm101", "exm104")
-purrr::map(markers, ~ plot_intensites(marker = .x))
+purrr::map(markers, ~ plot_intensities(marker = .x))
+
+
+#' other features:
+
+#' what other tables are there in the database?
+db_list_tables(con)
+
+#' stats on the people:
+batch_tbl <- tbl(con, "batch")
+batch_tbl %>% head()
+batch_tbl %>% group_by(batchid, sex, ancestry) %>% tally()
+
+#' stats on the markers
+markers_tbl <- tbl(con, "marker_info")
+markers_tbl %>% head()
+markers_tbl %>% group_by(chr) %>% tally()
