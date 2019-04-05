@@ -45,7 +45,8 @@ ui <- fluidPage(
         selectInput("batch_filter", label = "QC Batch", choices = batch, selected = NULL, multiple = TRUE),
 
         h3("Plot Options"),
-        checkboxGroupInput("plot_options", label = "Facet By", choices = c("Ancestry", "Batch", "Sex"))
+        checkboxGroupInput("facet_options", label = "Facet By", choices = c("Ancestry", "Sex")),
+        radioButtons("colour_options", label = "Colour", choices = list(GType = "gtype", Sex = "sex", Ancestry = "ancestry")  )
     ),
 
     mainPanel(
@@ -102,8 +103,17 @@ server <- function(input, output) {
     # PLot of the intensities for the chosen marker
     output$intensityPlot <- renderPlot({
         dat <- filtered_data()
+
+        if(!is.null(input$batch_filter)){
+            dat <- dat %>% filter(batchid %in% input$batch_filter)
+        }
+
         plot_title <- dat[["name"]][1]
-        filtered_data()  %>% ggplot(aes(x = x, y = y, colour = gtype)) + geom_point() + ggtitle(plot_title) + theme_bw() + expand_limits(x = c(0,1), y = c(0,1))
+        p <- dat  %>% ggplot(aes(x = x, y = y, colour = gtype)) + geom_point() + ggtitle(plot_title) + theme_bw() + expand_limits(x = c(0,1), y = c(0,1))
+        if(length(unique(dat$batchid)) > 1){
+           p <- p + facet_wrap(~ batchid)
+        }
+        p
     })
 
     observeEvent(input$markerinfo_cell_clicked, {
