@@ -67,9 +67,12 @@ CREATE TABLE IF NOT EXISTS "sample"(
   "sampleid" INTEGER PRIMARY KEY AUTOINCREMENT,
   "samplecode" CHAR NOT NULL,
   "batchid" INTEGER NOT NULL,
-  "sex" CHAR,
+  "barcode_pos" CHAR,
+  "reported_sex" CHAR,
+  "genetic_sex" CHAR,
   "ancestry" CHAR,
   "callrate" REAL,
+  "passed_gt_qc" LOGICAL,
   UNIQUE(samplecode, batchid),
   FOREIGN KEY ("batchid") REFERENCES batch("batchid")
 )
@@ -98,7 +101,7 @@ CREATE TABLE IF NOT EXISTS "intensities"(
 ```
 
 ```{sql, connection = con}
-CREATE VIEW IF NOT EXISTS combined AS SELECT marker_info.name, marker_info.chr, marker_info.position, sample.samplecode, batch.*, intensities.* FROM intensities 
+CREATE VIEW IF NOT EXISTS combined AS SELECT marker_info.name, marker_info.chr, marker_info.position, sample.samplecode, sample.reported_sex, sample.genetic_sex, sample.passed_gt_qc, sample.ancestry, batch.*, intensities.* FROM intensities 
   LEFT JOIN marker_info on intensities.markername = marker_info.name 
   LEFT JOIN sample on sample.sampleid = intensities.sampleid
   LEFT JOIN batch on sample.batchid = batch.batchid;
@@ -116,6 +119,15 @@ names(suffixes) <- suffixes
 possible_chrs <- c("0","1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "MT", "X", "XY", "Y" )
 
 intensities_colnames <- dbListFields(con, "intensities")
+
+qc_samples <- read_csv(here::here("data/Summary_QC_PassFail101116.csv"), col_types = "ccdcccccccci___ccccc") %>% 
+  rename('samplecode' = Sample.ID,  "reported_sex" = Reported.Sex, "genetic_sex" = Genetic.Sex) %>% # closest match to the original GS name
+  mutate(passed_gt_qc = if_else(QCStatus == "Passed Genotyping QC", TRUE, FALSE, FALSE), 
+         barcode_pos = paste0(ChipBarcode, "_",ChipPosition),
+         ancestry = "none_assigned", # remove this once real ancestry is in the file
+         batchid = str_extract_all(QCBatch, '[0-9]+'), rn = row_number())%>% unnest() %>% mutate(batchid = as.numeric(batchid)) %>% select(samplecode, batchid, barcode_pos, reported_sex, genetic_sex, callrate = Call.Rate, passed_gt_qc )
+
+
 ```
 
 function to process the data as it comes in
@@ -141,7 +153,8 @@ update_sample_table <- function(gs_long_combined, batch){
   # existing samples
   existing_samples <- dbReadTable(con, "sample")
   
-  samples <- gs_long_combined %>% select(samplecode = sample) %>% mutate(batchid = batch, sex = NA, ancestry = NA) %>% distinct()
+  samples <- gs_long_combined %>% select(samplecode = sample) %>% mutate(batchid = batch) %>% distinct()
+  samples <- left_join(samples, qc_samples, by = c("samplecode", "batchid"))
  
   # create table of new samples to be added
   if(NROW(existing_samples) > 0){
@@ -200,24 +213,30 @@ f <- function(gs_tab, pos){
   process_chunk(gs_tab, batch = 1)
 }
 
-header_spec <- def_col_data_type(here::here("data/test10000_batch1.txt"))
+header_spec <- def_col_data_type(here::here("data/QC_Batch1-GenomeStudio_FullDataTable.txt"))
 
 #test <- read_delim(file = here::here("data/test10000_batch1.txt"),delim = '\t', col_types = header_spec$cols,  n_max = 100) 
 
-read_delim_chunked(file = here::here("data/test10000_batch1.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 2000, callback = SideEffectChunkCallback$new(f), progress = TRUE) 
+read_delim_chunked(file = here::here("data/QC_Batch1-GenomeStudio_FullDataTable.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 5000, callback = SideEffectChunkCallback$new(f), progress = TRUE) 
 
 f <- function(gs_tab, pos){
   process_chunk(gs_tab, batch = 2)
 }
 
-header_spec <- def_col_data_type(here::here("data/test10000_batch2.txt"))
+header_spec <- def_col_data_type(here::here("data/QC_Batch2-GenomeStudio_FullDataTable.txt"))
 
 #test <- read_delim(file = here::here("data/test10000_batch1.txt"),delim = '\t', col_types = header_spec$cols,  n_max = 100) 
 
-read_delim_chunked(file = here::here("data/test10000_batch2.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 1000, callback = SideEffectChunkCallback$new(f), progress = TRUE)
+read_delim_chunked(file = here::here("data/QC_Batch2-GenomeStudio_FullDataTable.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 1000, callback = SideEffectChunkCallback$new(f), progress = TRUE)
 ```
 
+Load in the intensities:
+```
+sqlite3 gs_intensities.sqlite
 
+.mode csv
+.import intensities_batch_1.csv intensities
+```
 
 Load in the first 100 rows to get the data types
 ```{r}
