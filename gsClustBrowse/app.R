@@ -25,6 +25,7 @@ batch <- 1:13
 
 # define genotype colour scale
 gt_colours <- scale_color_manual( values=c("NC" = "grey", "BB" = "green", "AB" = "blue", "AA" ="red"))
+sex_colours <- scale_color_manual(values = c("Female" = "orange", "Male" = "purple", "Missing" = "lightgrey", "Unknown" = "lightgrey"))
 
 onStop(function() {
     dbDisconnect(con)
@@ -41,16 +42,16 @@ ui <- fluidPage(
         numericInput("markerinfo_start", value = 1, min = 1, label = "Start"),
         numericInput("markerinfo_end", value = 1e6, min = 1, label = "End"),
         hr(),
-        p("Currently not 'plugged-in:'"),
+
         h3("Filter Data"),
-        radioButtons("sex_filter", label = "Sex", choices = list(All = "all", Male = "male", Female = "female")  ),
+        radioButtons("sex_filter", label = "Sex", choices = list(All = "all", Male = "Male", Female = "Female")  ),
         selectInput("ancestry_filter", label = "Ancestry", choices = pops, selected = NULL, multiple = TRUE),
         selectInput("batch_filter", label = "QC Batch", choices = batch, selected = NULL, multiple = TRUE),
 
         h3("Plot Options"),
         radioButtons("coord_options", label = "Axes", choices = list(`Theta/R` = "theta_r", `X/Y` = "xy", `X/Y Raw` = "xy_raw")  ),
-        checkboxGroupInput("facet_options", label = "Facet By", choices = c("Ancestry", "Sex")),
-        radioButtons("colour_options", label = "Colour", choices = list(GType = "gtype", Sex = "sex", Ancestry = "ancestry")  )
+        radioButtons("facet_options", label = "Facet By", choices = list(None = "none", Ancestry = "ancestry", `Reported Sex` = "reported_sex", `Genetic Sex` = "genetic_sex")),
+        radioButtons("colour_options", label = "Colour", choices = list(Gtype = "gtype", `Reported Sex` = "reported_sex", `Genetic Sex` = "genetic_sex", Ancestry = "ancestry"),   )
     ),
 
     mainPanel(
@@ -96,36 +97,55 @@ server <- function(input, output) {
 
         marker_detail <- markerinfo_tbl() %>% filter(name == marker) %>% collect()
         output$text <- renderPrint(marker_detail)
-        combined_tbl %>% filter(chr %in% marker_detail$chr, position %in% marker_detail$position) %>% collect()
-
-
+        out_dat <- combined_tbl %>% filter(chr %in% marker_detail$chr, position %in% marker_detail$position) %>% collect()
+        if(input$sex_filter != "all"){
+            out_dat <- out_dat %>% filter(genetic_sex == input$sex_filter | reported_sex == input$sex_filter)
+        }
+        out_dat %>% mutate(reported_sex = case_when(reported_sex == "Male" ~ "Male", reported_sex == "Female"~ "Female", is.na(reported_sex) | reported_sex == "" ~ "Missing"), genetic_sex = case_when(genetic_sex == "Male" ~ "Male", genetic_sex == "Female"~ "Female", (is.na(genetic_sex) | genetic_sex == "" | genetic_sex == "Unknown" | is.null(genetic_sex)) ~ "Unknown"))
 
     })
 
-    output$testTable <- renderDataTable({DT::datatable(filtered_data() %>% head())})
+    output$testTable <- renderDataTable({DT::datatable(filtered_data())})
 
     # PLot of the intensities for the chosen marker
     output$intensityPlot <- renderPlot({
-        dat <- filtered_data() #%>% mutate(gtype = forcats::as_factor(gtype) %>% forcats::lvls_expand(.,c("AA","AB","BB", "NC")))
+        dat <- filtered_data()#%>% mutate(gtype = forcats::as_factor(gtype) %>% forcats::lvls_expand(.,c("AA","AB","BB", "NC")))
 
         if(!is.null(input$batch_filter)){
             dat <- dat %>% filter(batchid %in% input$batch_filter)
         }
-
+        selected_colour <- input$colour_options
         plot_title <- dat[["name"]][1]
-        p <- dat  %>% ggplot(aes(x = theta, y = r, colour = gtype))
+
+        # coordinate plotting options
+        p <- dat  %>% ggplot(aes(x = theta, y = r))
         if(input$coord_options == "xy"){
-            p <-  dat  %>% ggplot(aes(x = x, y = y, colour = gtype))
+            p <-  dat  %>% ggplot(aes(x = x, y = y))
         } else if(input$coord_options == "xy_raw"){
-            p <-  dat  %>% ggplot(aes(x = x_raw, y = y_raw, colour = gtype))
+            p <-  dat  %>% ggplot(aes(x = x_raw, y = y_raw))
         }
 
-        p <- p + geom_point() + ggtitle(plot_title) + theme_bw() + expand_limits(x = c(0,1), y = c(0,1)) + facet_wrap(~ batchid) + gt_colours
+        # facetting
+        if(input$facet_options == "none"){
+            p <- p + facet_wrap(~ batchid)
+        } else {
+            facet <- paste0(input$facet_options, "~ batchid")
+           p <- p + facet_grid( facet)
+        }
 
+        # colours
+        if(input$colour_options == "gtype"){
+            p <- p + geom_point(aes_string(colour = input$colour_options), alpha = 0.7) + gt_colours
+        } else {
+           p <-p + geom_point(aes_string(colour = input$colour_options), alpha = 0.7) + sex_colours
+        }
 
+        p <- p + ggtitle(plot_title) + theme_bw() + expand_limits(x = c(0,1), y = c(0,1))
 
         p
     })
+
+
 
     observeEvent(input$markerinfo_cell_clicked, {
 
