@@ -227,7 +227,7 @@ header_spec <- def_col_data_type(here::here("data/QC_Batch2-GenomeStudio_FullDat
 
 #test <- read_delim(file = here::here("data/test10000_batch1.txt"),delim = '\t', col_types = header_spec$cols,  n_max = 100) 
 
-read_delim_chunked(file = here::here("data/QC_Batch2-GenomeStudio_FullDataTable.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 1000, callback = SideEffectChunkCallback$new(f), progress = TRUE)
+read_delim_chunked(file = here::here("data/QC_Batch2-GenomeStudio_FullDataTable.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 5000, callback = SideEffectChunkCallback$new(f), progress = TRUE)
 ```
 
 Load in the intensities:
@@ -236,6 +236,7 @@ sqlite3 gs_intensities.sqlite
 
 .mode csv
 .import intensities_batch_1.csv intensities
+.import intensities_batch_2.csv intensities
 ```
 
 Load in the first 100 rows to get the data types
