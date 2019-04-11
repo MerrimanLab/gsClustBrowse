@@ -3,5 +3,5 @@
 .RData
 .Ruserdata
 */*.html
-data/*.sqlite
+data/*
 config.yml
