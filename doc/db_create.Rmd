@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS "intensities"(
 ```
 
 ```{sql, connection = con}
-CREATE VIEW IF NOT EXISTS combined AS SELECT marker_info.name, marker_info.chr, marker_info.position, sample.samplecode, sample.reported_sex, sample.genetic_sex, sample.passed_gt_qc, sample.ancestry, batch.*, intensities.* FROM intensities 
+CREATE VIEW IF NOT EXISTS combined AS SELECT marker_info.name, marker_info.chr, marker_info.position, sample.samplecode, sample.reported_sex, sample.genetic_sex, sample.passed_gt_qc, sample.ancestry, sample.callrate, batch.*, intensities.* FROM intensities 
   LEFT JOIN marker_info on intensities.markername = marker_info.name 
   LEFT JOIN sample on sample.sampleid = intensities.sampleid
   LEFT JOIN batch on sample.batchid = batch.batchid;
