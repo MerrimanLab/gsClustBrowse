@@ -38,12 +38,16 @@ ui <- fluidPage(
     titlePanel("Browse Intensities"),
     sidebarPanel(
         h3("Filter Markers"),
-        numericInput("markerinfo_chr", value = 1, min = 1, label = "Chr"),
+        radioButtons("marker_filter", label = "Select by marker or position", choices = list(Position = "position", Marker = "marker")  ),
+        textInput("probe_id", label = "Probe ID",value = NULL ,placeholder = "Enter a valid probe id (not currently implementec" ),
+        numericInput("markerinfo_chr", value = 1, min = 1, label = "Chr", width = 150),
         numericInput("markerinfo_start", value = 1, min = 1, label = "Start"),
         numericInput("markerinfo_end", value = 1e6, min = 1, label = "End"),
         hr(),
 
         h3("Filter Data"),
+        checkboxInput("inc_sample_callrate_lt_95", label = "Sample callrate < 98%", value = FALSE),
+        checkboxInput("passed_gt_qc", label = "Samples that passed all QC", value = TRUE),
         radioButtons("sex_filter", label = "Sex", choices = list(All = "all", Male = "Male", Female = "Female")  ),
         selectInput("ancestry_filter", label = "Ancestry", choices = pops, selected = NULL, multiple = TRUE),
         selectInput("batch_filter", label = "QC Batch", choices = batch, selected = NULL, multiple = TRUE),
@@ -51,8 +55,8 @@ ui <- fluidPage(
         h3("Plot Options"),
         radioButtons("coord_options", label = "Axes", choices = list(`Theta/R` = "theta_r", `X/Y` = "xy", `X/Y Raw` = "xy_raw")  ),
         radioButtons("facet_options", label = "Facet By", choices = list(None = "none", Ancestry = "ancestry", `Reported Sex` = "reported_sex", `Genetic Sex` = "genetic_sex")),
-        radioButtons("colour_options", label = "Colour", choices = list(Gtype = "gtype", `Reported Sex` = "reported_sex", `Genetic Sex` = "genetic_sex", Ancestry = "ancestry"),   )
-    ),
+        radioButtons("colour_options", label = "Colour", choices = list(Gtype = "gtype", `Reported Sex` = "reported_sex", `Genetic Sex` = "genetic_sex", Ancestry = "ancestry")   )
+        , width = 3),
 
     mainPanel(
 
@@ -60,6 +64,7 @@ ui <- fluidPage(
         fluidRow(
             dataTableOutput("markerinfo")),
         #dataTableOutput("testTable")
+        fluidRow(textOutput("probename")),
         fluidRow(
             plotOutput("intensityPlot")
         )
@@ -70,9 +75,14 @@ ui <- fluidPage(
 # Define server logic required to draw a histogram
 server <- function(input, output) {
     # marker table
-    markerinfo_tbl <- reactive(tbl(con, "marker_info") %>%  select(chr, position, name) %>%
-                                   filter(chr == input$markerinfo_chr, between(position, input$markerinfo_start, input$markerinfo_end)) %>%  select(name, chr, position) %>%
-                                   arrange(position) #%>% as_tibble()
+    markerinfo_tbl_pos <- reactive(tbl(con, "marker_info") %>%  select(chr, position, name) %>%
+                                       filter(chr == input$markerinfo_chr, between(position, input$markerinfo_start, input$markerinfo_end)) %>%  select(name, chr, position) %>%
+                                       arrange(position) #%>% as_tibble()
+    )
+
+    markerinfo_tbl_probe <- reactive(tbl(con, "marker_info") %>%  select(chr, position, name) %>%
+                                         filter(name == input$probe_id) %>%  select(name, chr, position) %>%
+                                         arrange(position) #%>% as_tibble()
     )
     # joined dataset
     combined_tbl <- tbl(con, "combined")
@@ -81,25 +91,62 @@ server <- function(input, output) {
 
     # return the marker table from the db so that markers can be browsed
     output$markerinfo <- renderDataTable(
-        datatable({markerinfo_tbl() %>%collect()}, selection = list( target = "row", mode = "single"),
-                  rownames = FALSE))
+        if(input$marker_filter == "position") {
+            datatable({ markerinfo_tbl_pos() %>%collect()}
+                      , selection = list( target = "row", mode = "single"),
+                      rownames = FALSE)
+        } else {
+        datatable({ markerinfo_tbl_probe() %>%collect()}
+            , selection = list( target = "row", mode = "single"),
+                  rownames = FALSE)
+        }
+
+        )
 
     filtered_data <- reactive({
+        if(input$marker_filter == "position"){
 
-        marker <- "exm101"
-        if(!is.null(input$markerinfo_cell_clicked$col)){
-            #     output$text <- renderPrint(colnames(markerinfo_tbl()))
-            if(colnames(markerinfo_tbl())[input$markerinfo_cell_clicked$col +1 ] == "name"){
-                marker <- input$markerinfo_cell_clicked$value
+            marker <- "exm101"
+            if(!is.null(input$markerinfo_cell_clicked$col)){
+                #     output$text <- renderPrint(colnames(markerinfo_tbl()))
+                if(colnames(markerinfo_tbl_pos())[input$markerinfo_cell_clicked$col +1 ] == "name"){
+                    marker <- input$markerinfo_cell_clicked$value
+                }
             }
-        }
-        #output$text <- renderPrint(cell)
 
-        marker_detail <- markerinfo_tbl() %>% filter(name == marker) %>% collect()
+
+
+
+            #output$text <- renderPrint(cell)
+
+            marker_detail <- markerinfo_tbl_pos() %>% filter(name == marker) %>% collect()
+            out_dat <- combined_tbl %>% filter(chr %in% marker_detail$chr, position %in% marker_detail$position) %>% collect()
+        } else if(!is.null(input$probe_id) | !is.na(input$probe_id) | input$probe_id != "") {
+            #message(input$probe_id)
+            marker_detail <- markerinfo_tbl_probe() %>% collect()
+            out_dat <- combined_tbl %>% filter(name == input$probe_id) %>% collect()
+
+            output$probename <- renderText(paste("Displaying Marker:", input$probe_id))
+            if(NROW(out_dat) == 0){
+                output$probename <- renderText(paste("Marker:", input$probe_id ,"not found"))
+            }
+        } else {
+            message("probe_id null")
+            return(NULL)
+        }
+
         output$text <- renderPrint(marker_detail)
-        out_dat <- combined_tbl %>% filter(chr %in% marker_detail$chr, position %in% marker_detail$position) %>% collect()
+
         if(input$sex_filter != "all"){
             out_dat <- out_dat %>% filter(genetic_sex == input$sex_filter | reported_sex == input$sex_filter)
+        }
+
+        if(input$passed_gt_qc){
+            out_dat <- out_dat %>% filter(passed_gt_qc == 1)
+        }
+
+        if(!input$inc_sample_callrate_lt_95){ # when TRUE remove samples with callrate < 95%
+            out_dat <- out_dat %>% filter(callrate > 0.98)
         }
         out_dat %>% mutate(reported_sex = case_when(reported_sex == "Male" ~ "Male", reported_sex == "Female"~ "Female", is.na(reported_sex) | reported_sex == "" ~ "Missing"), genetic_sex = case_when(genetic_sex == "Male" ~ "Male", genetic_sex == "Female"~ "Female", (is.na(genetic_sex) | genetic_sex == "" | genetic_sex == "Unknown" | is.null(genetic_sex)) ~ "Unknown"))
 
@@ -110,6 +157,10 @@ server <- function(input, output) {
     # PLot of the intensities for the chosen marker
     output$intensityPlot <- renderPlot({
         dat <- filtered_data()#%>% mutate(gtype = forcats::as_factor(gtype) %>% forcats::lvls_expand(.,c("AA","AB","BB", "NC")))
+
+        if(NROW(dat) == 0){
+            return(NULL)
+        }
 
         if(!is.null(input$batch_filter)){
             dat <- dat %>% filter(batchid %in% input$batch_filter)
@@ -130,14 +181,14 @@ server <- function(input, output) {
             p <- p + facet_wrap(~ batchid)
         } else {
             facet <- paste0(input$facet_options, "~ batchid")
-           p <- p + facet_grid( facet)
+            p <- p + facet_grid( facet)
         }
 
         # colours
         if(input$colour_options == "gtype"){
             p <- p + geom_point(aes_string(colour = input$colour_options), alpha = 0.7) + gt_colours
         } else {
-           p <-p + geom_point(aes_string(colour = input$colour_options), alpha = 0.7) + sex_colours
+            p <-p + geom_point(aes_string(colour = input$colour_options), alpha = 0.7) + sex_colours
         }
 
         p <- p + ggtitle(plot_title) + theme_bw() + expand_limits(x = c(0,1), y = c(0,1))
