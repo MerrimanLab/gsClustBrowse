@@ -80,9 +80,16 @@ server <- function(input, output) {
                                        arrange(position) #%>% as_tibble()
     )
 
-    markerinfo_tbl_probe <- reactive(tbl(con, "marker_info") %>%  select(chr, position, name) %>%
-                                         filter(name == input$probe_id) %>%  select(name, chr, position) %>%
-                                         arrange(position) #%>% as_tibble()
+    markerinfo_tbl_probe <- reactive(
+        {mkr_tbl <- tbl(con, "marker_info") %>%  select(chr, position, name) %>% head(0) %>%  select(name, chr, position) %>% arrange(position)
+
+        if(!is.null(input$probe_id)  & input$probe_id != ""){
+            mkr_tbl <- tbl(con, "marker_info") %>%  select(chr, position, name) %>%
+                filter(str_detect(name, input$probe_id)) %>%  select(name, chr, position) %>%
+                arrange(name) #%>% as_tibble()
+        }
+        mkr_tbl
+        }
     )
     # joined dataset
     combined_tbl <- tbl(con, "combined")
@@ -91,51 +98,29 @@ server <- function(input, output) {
 
     # return the marker table from the db so that markers can be browsed
     output$markerinfo <- renderDataTable(
-        if(input$marker_filter == "position") {
-            datatable({ markerinfo_tbl_pos() %>%collect()}
+
+            datatable({ markerinfo_table_pos_or_probe() %>%collect()}
                       , selection = list( target = "row", mode = "single"),
                       rownames = FALSE)
-        } else {
-        datatable({ markerinfo_tbl_probe() %>%collect()}
-            , selection = list( target = "row", mode = "single"),
-                  rownames = FALSE)
-        }
+    )
 
-        )
-
+    # filter the data to be supplied for plotting
     filtered_data <- reactive({
-        if(input$marker_filter == "position"){
+        marker_tbl <- markerinfo_table_pos_or_probe()
 
-            marker <- "exm101"
-            if(!is.null(input$markerinfo_cell_clicked$col)){
-                #     output$text <- renderPrint(colnames(markerinfo_tbl()))
-                if(colnames(markerinfo_tbl_pos())[input$markerinfo_cell_clicked$col +1 ] == "name"){
-                    marker <- input$markerinfo_cell_clicked$value
-                }
+        # initially set marker to be *something*
+        marker <- "exm101"
+        if(!is.null(input$markerinfo_cell_clicked$col)){
+            # if the marker table has been clicked, set the marker to be the marker name that was clicked
+            if(colnames(marker_tbl)[input$markerinfo_cell_clicked$col +1 ] == "name"){
+                marker <- input$markerinfo_cell_clicked$value
             }
-
-
-
-
-            #output$text <- renderPrint(cell)
-
-            marker_detail <- markerinfo_tbl_pos() %>% filter(name == marker) %>% collect()
-            out_dat <- combined_tbl %>% filter(chr %in% marker_detail$chr, position %in% marker_detail$position) %>% collect()
-        } else if(!is.null(input$probe_id) | !is.na(input$probe_id) | input$probe_id != "") {
-            #message(input$probe_id)
-            marker_detail <- markerinfo_tbl_probe() %>% collect()
-            out_dat <- combined_tbl %>% filter(name == input$probe_id) %>% collect()
-
-            output$probename <- renderText(paste("Displaying Marker:", input$probe_id))
-            if(NROW(out_dat) == 0){
-                output$probename <- renderText(paste("Marker:", input$probe_id ,"not found"))
-            }
-        } else {
-            message("probe_id null")
-            return(NULL)
         }
 
-        output$text <- renderPrint(marker_detail)
+        # pull out the position information about the marker to use for filtering
+        marker_detail <- marker_tbl %>% filter(name == marker) %>% collect()
+        out_dat <- combined_tbl %>% filter(chr %in% marker_detail$chr, position %in% marker_detail$position) %>% collect()
+
 
         if(input$sex_filter != "all"){
             out_dat <- out_dat %>% filter(genetic_sex == input$sex_filter | reported_sex == input$sex_filter)
@@ -152,9 +137,9 @@ server <- function(input, output) {
 
     })
 
-    output$testTable <- renderDataTable({DT::datatable(filtered_data())})
 
-    # PLot of the intensities for the chosen marker
+
+    # Plot of the intensities for the chosen marker
     output$intensityPlot <- renderPlot({
         dat <- filtered_data()#%>% mutate(gtype = forcats::as_factor(gtype) %>% forcats::lvls_expand(.,c("AA","AB","BB", "NC")))
 
@@ -196,14 +181,22 @@ server <- function(input, output) {
         p
     })
 
+    markerinfo_table_pos_or_probe <- reactive(
+       { if(input$marker_filter == "position"){
+            tab <- markerinfo_tbl_pos()
+        }else{
+            tab <- markerinfo_tbl_probe()
+        }
+        tab
+       }
+    )
 
 
+    # watches for the marker table to be clicked and updates everything
     observeEvent(input$markerinfo_cell_clicked, {
-
         cell <- input$markerinfo_cell_clicked
         if(!is.null(cell$value)){
-            if(colnames(markerinfo_tbl())[[cell$col +1 ]] == "name"){
-
+            if(colnames(markerinfo_table_pos_or_probe())[[cell$col +1 ]] == "name"){
                 output$cell <- renderPrint(cell)
             }}
     })
