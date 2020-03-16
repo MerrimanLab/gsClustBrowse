@@ -16,9 +16,9 @@ library(odbc)
 library(config)
 
 # get database configuration info from the config.yml file
-dsn <- get("gsint")
+dsn <- get("psql_admin")
 # connect to the database
-con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database , timeout = 10)
+con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database, servername = dsn$server, port = dsn$port, UID = dsn$user, PWD = dsn$password , timeout = 100)
 
 pops <- c("East Polynesian","West Polynesian", "European", "Asian")
 batch <- 1:13
@@ -40,7 +40,7 @@ ui <- fluidPage(
         h3("Filter Markers"),
         radioButtons("marker_filter", label = "Select by marker or position", choices = list(Position = "position", Marker = "marker")  ),
         textInput("probe_id", label = "Probe ID",value = NULL ,placeholder = "Enter a valid probe id (not currently implementec" ),
-        numericInput("markerinfo_chr", value = 1, min = 1, label = "Chr", width = 150),
+        textInput("markerinfo_chr", value = 1, label = "Chr", width = 150),
         numericInput("markerinfo_start", value = 1, min = 1, label = "Start"),
         numericInput("markerinfo_end", value = 1e6, min = 1, label = "End"),
         hr(),
@@ -63,7 +63,7 @@ ui <- fluidPage(
         p("Click on a marker name"),
         fluidRow(
             dataTableOutput("markerinfo")),
-        #dataTableOutput("testTable")
+        #dataTableOutput("testTable"),
         fluidRow(textOutput("probename")),
         fluidRow(
             plotOutput("intensityPlot")
@@ -76,7 +76,7 @@ ui <- fluidPage(
 server <- function(input, output) {
     # marker table
     markerinfo_tbl_pos <- reactive(tbl(con, "marker_info") %>%  select(chr, position, name) %>%
-                                       filter(chr == input$markerinfo_chr, between(position, input$markerinfo_start, input$markerinfo_end)) %>%  select(name, chr, position) %>%
+                                       filter(chr == !!input$markerinfo_chr, between(position, !!input$markerinfo_start, !!input$markerinfo_end)) %>%  select(name, chr, position) %>%
                                        arrange(position) #%>% as_tibble()
     )
 
@@ -85,7 +85,7 @@ server <- function(input, output) {
 
         if(!is.null(input$probe_id)  & input$probe_id != ""){
             mkr_tbl <- tbl(con, "marker_info") %>%  select(chr, position, name) %>%
-                filter(str_detect(name, input$probe_id)) %>%  select(name, chr, position) %>%
+                filter(str_detect(name, !!input$probe_id)) %>%  select(name, chr, position) %>%
                 arrange(name) #%>% as_tibble()
         }
         mkr_tbl
@@ -119,11 +119,11 @@ server <- function(input, output) {
 
         # pull out the position information about the marker to use for filtering
         marker_detail <- marker_tbl %>% filter(name == marker) %>% collect()
-        out_dat <- combined_tbl %>% filter(chr %in% marker_detail$chr, position %in% marker_detail$position) %>% collect()
+        out_dat <- combined_tbl %>% filter(chr %in% !!marker_detail$chr, position %in% !!marker_detail$position) %>% collect()
 
 
         if(input$sex_filter != "all"){
-            out_dat <- out_dat %>% filter(genetic_sex == input$sex_filter | reported_sex == input$sex_filter)
+            out_dat <- out_dat %>% filter(genetic_sex == !!input$sex_filter | reported_sex == !!input$sex_filter)
         }
 
         if(input$passed_gt_qc){
@@ -148,7 +148,7 @@ server <- function(input, output) {
         }
 
         if(!is.null(input$batch_filter)){
-            dat <- dat %>% filter(batchid %in% input$batch_filter)
+            dat <- dat %>% filter(batchid %in% !!input$batch_filter)
         }
         selected_colour <- input$colour_options
         plot_title <- dat[["name"]][1]
