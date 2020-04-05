@@ -37,26 +37,31 @@ ui <- fluidPage(
     # Application title
     titlePanel("Browse Intensities"),
     sidebarPanel(
-        h3("Filter Markers"),
-        radioButtons("marker_filter", label = "Select by marker or position", choices = list(Position = "position", Marker = "marker")  ),
-        textInput("probe_id", label = "Probe ID",value = NULL ,placeholder = "Enter a valid probe id (not currently implementec" ),
-        textInput("markerinfo_chr", value = 1, label = "Chr", width = 150),
-        numericInput("markerinfo_start", value = 1, min = 1, label = "Start"),
-        numericInput("markerinfo_end", value = 1e6, min = 1, label = "End"),
-        hr(),
+        tabsetPanel(
+            tabPanel("Filters",
+                     h3("Filter Markers"),
+                     radioButtons("marker_filter", label = "Select by marker or position", choices = list(Position = "position", Marker = "marker")  ),
+                     textInput("probe_id", label = "Probe ID",value = NULL ,placeholder = "Enter a valid probe id (not currently implementec" ),
+                     textInput("markerinfo_chr", value = 1, label = "Chr", width = 150),
+                     numericInput("markerinfo_start", value = 1, min = 1, label = "Start"),
+                     numericInput("markerinfo_end", value = 1e6, min = 1, label = "End"),
+                     hr(),
 
-        h3("Filter Data"),
-        checkboxInput("inc_sample_callrate_lt_95", label = "Sample callrate < 98%", value = FALSE),
-        checkboxInput("passed_gt_qc", label = "Samples that passed all QC", value = TRUE),
-        radioButtons("sex_filter", label = "Sex", choices = list(All = "all", Male = "Male", Female = "Female")  ),
-        selectInput("ancestry_filter", label = "Ancestry", choices = pops, selected = NULL, multiple = TRUE),
-        selectInput("batch_filter", label = "QC Batch", choices = batch, selected = NULL, multiple = TRUE),
+                     h3("Filter Data"),
+                     checkboxInput("inc_sample_callrate_lt_95", label = "Sample callrate < 98%", value = FALSE),
+                     checkboxInput("passed_gt_qc", label = "Samples that passed all QC", value = TRUE),
+                     radioButtons("sex_filter", label = "Sex", choices = list(All = "all", Male = "Male", Female = "Female")  ),
+                     selectInput("ancestry_filter", label = "Ancestry", choices = pops, selected = NULL, multiple = TRUE),
+                     selectInput("batch_filter", label = "QC Batch", choices = batch, selected = NULL, multiple = TRUE),
+            ),
+            tabPanel("Plot options",
 
-        h3("Plot Options"),
-        radioButtons("coord_options", label = "Axes", choices = list(`Theta/R` = "theta_r", `X/Y` = "xy", `X/Y Raw` = "xy_raw")  ),
-        radioButtons("facet_options", label = "Facet By", choices = list(None = "none", Ancestry = "ancestry", `Reported Sex` = "reported_sex", `Genetic Sex` = "genetic_sex")),
-        radioButtons("colour_options", label = "Colour", choices = list(Gtype = "gtype", `Reported Sex` = "reported_sex", `Genetic Sex` = "genetic_sex", Ancestry = "ancestry")   )
-        , width = 3),
+                     radioButtons("coord_options", label = "Axes", choices = list(`Theta/R` = "theta_r", `X/Y` = "xy", `X/Y Raw` = "xy_raw")  ),
+                     radioButtons("facet_options", label = "Facet By", choices = list(None = "none", Ancestry = "ancestry", `Reported Sex` = "reported_sex", `Genetic Sex` = "genetic_sex")),
+                     radioButtons("colour_options", label = "Colour", choices = list(Gtype = "gtype", `Reported Sex` = "reported_sex", `Genetic Sex` = "genetic_sex", Ancestry = "ancestry")   )
+                     , width = 3)
+        )
+    ),
 
     mainPanel(
 
@@ -99,9 +104,9 @@ server <- function(input, output) {
     # return the marker table from the db so that markers can be browsed
     output$markerinfo <- renderDataTable(
 
-            datatable({ markerinfo_table_pos_or_probe() %>%collect()}
-                      , selection = list( target = "row", mode = "single"),
-                      rownames = FALSE)
+        datatable({ markerinfo_table_pos_or_probe() %>%collect()}
+                  , selection = list( target = "row", mode = "single"),
+                  rownames = FALSE)
     )
 
     # filter the data to be supplied for plotting
@@ -182,13 +187,13 @@ server <- function(input, output) {
     })
 
     markerinfo_table_pos_or_probe <- reactive(
-       { if(input$marker_filter == "position"){
+        { if(input$marker_filter == "position"){
             tab <- markerinfo_tbl_pos()
         }else{
             tab <- markerinfo_tbl_probe()
         }
-        tab
-       }
+            tab
+        }
     )
 
 
