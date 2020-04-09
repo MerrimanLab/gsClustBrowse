@@ -16,12 +16,12 @@ library(odbc)
 library(config)
 
 # get database configuration info from the config.yml file
-dsn <- get("psql_admin")
+dsn <- get("psql_ro")
 # connect to the database
 con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database, servername = dsn$server, port = dsn$port, UID = dsn$user, PWD = dsn$password , timeout = 100)
 
-pops <- c("East Polynesian","West Polynesian", "European", "Asian")
-batch <- 1:13
+pops <- tbl(con, "sample") %>% select(ancestry) %>%  mutate(ancestry = ifelse(is.na(ancestry),"Missing", ancestry)) %>%  pull(ancestry) %>% unique()
+batch <- tbl(con, "batch") %>% pull(batchid)
 
 # define genotype colour scale
 gt_colours <- scale_color_manual( values=c("NC" = "grey", "BB" = "green", "AB" = "blue", "AA" ="red"))
@@ -41,7 +41,7 @@ ui <- fluidPage(
             tabPanel("Filters",
                      h3("Filter Markers"),
                      radioButtons("marker_filter", label = "Select by marker or position", choices = list(Position = "position", Marker = "marker")  ),
-                     textInput("probe_id", label = "Probe ID",value = NULL ,placeholder = "Enter a valid probe id (not currently implementec" ),
+                     textInput("probe_id", label = "Probe ID",value = NULL ,placeholder = "Enter a valid probe id" ),
                      textInput("markerinfo_chr", value = 1, label = "Chr", width = 150),
                      numericInput("markerinfo_start", value = 1, min = 1, label = "Start"),
                      numericInput("markerinfo_end", value = 1e6, min = 1, label = "End"),
@@ -129,6 +129,10 @@ server <- function(input, output) {
 
         if(input$sex_filter != "all"){
             out_dat <- out_dat %>% filter(genetic_sex == !!input$sex_filter | reported_sex == !!input$sex_filter)
+        }
+
+        if(!is.null(input$ancestry_filter)){
+            out_dat <- out_dat %>% mutate(ancestry = ifelse(is.na(ancestry),"Missing", ancestry)) %>% filter(ancestry %in% !!input$ancestry_filter)
         }
 
         if(input$passed_gt_qc){
