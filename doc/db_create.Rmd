@@ -8,6 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+library(here)
 library(dbplyr)
 library(DBI)
 library(odbc)
@@ -18,9 +19,10 @@ library(config)
 
 Set up the db connection
 ```{r connection}
-Sys.setenv(R_CONFIG_ACTIVE = "gwasdb_psql_admin")
-conf <- config::get()
-con <- dbConnect(odbc::odbc(),driver = conf$driver, database = conf$database, servername = conf$server, port = conf$port, UID = conf$user, PWD = conf$password , timeout = 100)
+dsn <- get("psql_admin")
+# connect to the database
+con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database, servername = dsn$server, port = dsn$port, UID = dsn$user, PWD = dsn$password , timeout = 100)
+
 ```
 
 
@@ -128,6 +130,29 @@ qc_samples <- read_delim(here::here("data/Summary_QC_PassFail101116_2.txt"), col
 
 ```
 
+load marker info into the marker table
+```{r}
+v1_0 <- read_csv(here("data/marker_list_24v1.0.csv"), guess_max = 10000)
+v1_1 <- read_csv(here("data/marker_list_24v1.1.csv"), guess_max = 10000)
+v1_3 <- read_csv(here("data/marker_list_24v1.3.csv"), guess_max = 10000)
+
+
+in_common <- v1_0 %>% select(Name, GenomeBuild, Chr, MapInfo, SourceSeq) %>% inner_join(v1_1 %>% select(Name, GenomeBuild, Chr, MapInfo, SourceSeq), by = c("Name", "GenomeBuild", "Chr", "MapInfo", "SourceSeq")) %>% inner_join(v1_3 %>% select(Name, GenomeBuild, Chr, MapInfo, SourceSeq), by = c("Name", "GenomeBuild", "Chr", "MapInfo", "SourceSeq")) 
+
+v1_0_diff <- v1_0 %>% select(Name, GenomeBuild, Chr, MapInfo, SourceSeq) %>% filter(!Name %in% in_common$Name)
+v1_1_diff <- v1_1 %>% select(Name, GenomeBuild, Chr, MapInfo, SourceSeq) %>% filter(!Name %in% in_common$Name)
+v1_3_diff <- v1_3 %>% select(Name, GenomeBuild, Chr, MapInfo, SourceSeq) %>% filter(!Name %in% in_common$Name)
+
+com_1.0_1.1 <- full_join(v1_0_diff, v1_1_diff, by = c("Name", "GenomeBuild", "Chr", "MapInfo", "SourceSeq")) %>% arrange(Name)
+table(duplicated(com_1.0_1.1$Name))
+
+com_1.0_1.1_1.3 <- full_join(com_1.0_1.1, v1_3_diff, by = c("Name", "GenomeBuild", "Chr", "MapInfo", "SourceSeq")) %>% arrange(Name)
+table(duplicated(com_1.0_1.1_1.3$Name))
+not_matching <- com_1.0_1.1_1.3 %>% filter(Name %in% com_1.0_1.1_1.3$Name[duplicated(Name)])
+```
+Manually altered rs4256733 (became Y chr), newrs147144682, indel.28260, indel.11207 to have positions not 0:0
+
+
 function to process the data as it comes in
 ```{r}
 
@@ -144,7 +169,12 @@ def_col_data_type <-function(filename){
 update_marker_table <- function(gs_tab){
   existing_markers <- dbReadTable(con, name = "marker_info")
   marker_info <- gs_tab %>% filter(Chr %in% possible_chrs) %>% select(name = Name, chr = Chr, position = Position) %>% mutate_if(is.numeric, as.integer)
-  DBI::dbWriteTable(con, name = "marker_info", value = anti_join(marker_info, existing_markers, by = c("name","chr","position") ) , append = TRUE)
+  not_loaded <- anti_join(marker_info, existing_markers, by = c("name","chr","position"))
+  
+  # work out if marker had position chr0:0 and if it does update it to the already loaded
+  zero_zero <- not_loaded %>% filter(position == 0, chr == 0, name %in% existing_markers$name)
+  not_loaded <- not_loaded %>% filter(!name %in% zero_zero$name)
+  DBI::dbWriteTable(con, name = "marker_info", value = not_loaded , append = TRUE)
 }
 
 update_sample_table <- function(gs_long_combined, batch){
@@ -268,24 +298,194 @@ header_spec <- def_col_data_type(here::here("data/QC_Batch7-GenomeStudio_FullDat
 
 read_delim_chunked(file = here::here("data/QC_Batch7-GenomeStudio_FullDataTable.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 10000, callback = SideEffectChunkCallback$new(f), progress = TRUE)
 
+f <- function(gs_tab, pos){
+  process_chunk(gs_tab, batch = 8)
+}
+
+header_spec <- def_col_data_type(here::here("data/QC8_AgResearch_FullDataTable_Mar25.txt"))
+
+read_delim_chunked(file = here::here("data/QC8_AgResearch_FullDataTable_Mar25.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 10000, callback = SideEffectChunkCallback$new(f), progress = TRUE)
+
+f <- function(gs_tab, pos){
+  process_chunk(gs_tab, batch = 9)
+}
+
+header_spec <- def_col_data_type(here::here("data/QC9_AgResearch_FullDataTable_Mar25.txt"))
+
+read_delim_chunked(file = here::here("data/QC9_AgResearch_FullDataTable_Mar25.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 10000, callback = SideEffectChunkCallback$new(f), progress = TRUE)
+
+f <- function(gs_tab, pos){
+  process_chunk(gs_tab, batch = 10)
+}
+
+header_spec <- def_col_data_type(here::here("data/QC_Batch10_FullDataTable.txt"))
+
+read_delim_chunked(file = here::here("data/QC_Batch10_FullDataTable.txt"),delim = '\t', col_types = header_spec$cols, chunk_size = 10000, callback = SideEffectChunkCallback$new(f), progress = TRUE)
+
 ```
 
 Load in the intensities:
 
+```{bash, eval = FALSE}
+psql -d gsclusbrowse -c "\copy intensities from 'intensities_batch_8_NA_removed.csv' with delimiter ',';"
+```
+
+
+
+Update sample table:
+
+```{r}
+sample_table <-dbReadTable(con,"sample")
+sample_info <- read_tsv(here("data/CZ-MB1.2-QC1.10_MergedPhenotypes_05032020.txt"), guess = 10000)
+
+sample_info_to_join <- sample_info %>% select(UniqueID, Pheno.SampleID, Pheno.AlternateID, Pheno.Study, Pheno.Gender, Pheno.Ethnicity, Pheno.BroadEthnicity, Pheno.SpecificEthnicity, Pheno.EthnicityGroup, Pheno.PolynesianGroup, Pheno.Withdrawn, starts_with("GenStudio"), Geno.GeneticSex, contains("Ancestry"), Geno.PolynesianGroupPC) %>%
+  unite("barcode_pos", GenStudio.ChipBarcode, GenStudio.ChipPosition, sep = "_") %>% 
+  mutate(batchid = as.numeric(str_remove(GenStudio.QCBatch, "QC"))) %>% 
+  select(GenStudio.SampleID, GenStudio.AlternateID, UniqueID, GenStudio.barcode_pos = barcode_pos, everything())
+
+# create a list of people that have withdrawn
+withdrawn_ids <- sample_info %>% filter(Pheno.Withdrawn == "Yes") %>% select(UniqueID, Pheno.SampleID, Pheno.AlternateID, GenStudio.SampleID)
+
+
+to_update_pheno <- left_join(sample_table, sample_info_to_join, by = c("samplecode" = "GenStudio.SampleID", "batchid")) %>% select(batchid, sampleid, everything()) %>% filter(!samplecode %in% c(withdrawn_ids$Pheno.SampleID, withdrawn_ids$Pheno.AlternateID)) %>% 
+  mutate(withdrawn = FALSE,
+         barcode = case_when(is.na(barcode_pos) | barcode_pos != GenStudio.barcode_pos ~ GenStudio.barcode_pos,
+                             TRUE ~ barcode_pos), # fill in missing barcode positions if possible and use the newer barcode_pos if conficted
+         reported_sex = ifelse(is.na(reported_sex), Pheno.Gender, reported_sex),
+         ancestry = Geno.AncestryGroupPC,
+         callrate = GenStudio.CallRate,
+         passed_gt_qc = if_else(GenStudio.Excluded == "No", TRUE, FALSE, NA),
+         ethnicity = Pheno.EthnicityGroup
+         )
+
+# check there isn't a duplication of barcode ids (that aren't NA)
+sum(!is.na((to_update_pheno$barcode_pos[duplicated(to_update_pheno$barcode_pos)]))) == 0
+
+# check for mismatches in barcode ids
+to_update_pheno %>% filter(barcode_pos != GenStudio.barcode_pos)
+
+
+to_remove <- sample_table %>% filter(samplecode %in% c(withdrawn_ids$Pheno.SampleID, withdrawn_ids$Pheno.AlternateID)) %>% 
+  mutate(withdrawn =  TRUE, passed_gt_qc = as.logical(passed_gt_qc))
+
+# check we table size will end up the same
+nrow(sample_table) - nrow(to_update_pheno) - nrow(to_remove) == 0
+# check there is no duplication of ids
+sum(duplicated(c(to_update_pheno$sampleid, to_remove$sampleid))) == 0
+  
+new_sample_table <- bind_rows(to_update_pheno, to_remove) %>% mutate(sex_mismatch = !reported_sex == genetic_sex, batchid = as.integer(batchid)) %>% 
+  select(sampleid, samplecode, batchid, barcode_pos, chip = GenStudio.ChipType, assigned_uniqueid = UniqueID, pheno_sampleid = Pheno.SampleID, pheno_altid = Pheno.AlternateID, pheno_study = Pheno.Study, reported_sex, genetic_sex, sex_mismatch, ancestry, ethnicity, callrate, passed_gt_qc, withdrawn)
+
+# check for spellings
+table(new_sample_table$batchid)
+table(new_sample_table$ethnicity)
+table(new_sample_table$ancestry)
+table(new_sample_table$chip)
+table(new_sample_table$pheno_study)
+table(new_sample_table$reported_sex)
+table(new_sample_table$genetic_sex)
+table(new_sample_table$passed_gt_qc)
+table(new_sample_table$withdrawn)
+
+write_csv(new_sample_table, here("data/new_sample_table.csv"))
+
+dbWriteTable(con, "new_sample", new_sample_table)
+```
+
+remove the old view
 ```{sql, connection = con}
+DROP VIEW combined;
+```
+
+alter the original sample table to get rid of the existing data
+```{sql, connection = con}
+ALTER TABLE sample DROP COLUMN ancestry, DROP COLUMN reported_sex, DROP COLUMN genetic_sex, DROP COLUMN barcode_pos, DROP COLUMN callrate, DROP COLUMN passed_gt_qc;
+```
+recreate the old columns plus the new ones
+```{sql, connection = con}
+ALTER TABLE sample 
+  ADD COLUMN barcode_pos TEXT,
+  ADD COLUMN chip TEXT,
+  ADD COLUMN assigned_uniqueid TEXT,
+  ADD COLUMN pheno_sampleid TEXT,
+  ADD COLUMN pheno_altid TEXT,
+  ADD COLUMN pheno_study TEXT,
+  ADD COLUMN reported_sex TEXT,
+  ADD COLUMN genetic_sex TEXT,
+  ADD COLUMN sex_mismatch BOOLEAN,
+  ADD COLUMN ancestry TEXT,
+  ADD COLUMN ethnicity TEXT, 
+  ADD COLUMN callrate REAL,
+  ADD COLUMN passed_gt_qc BOOLEAN,
+  ADD COLUMN withdrawn BOOLEAN;
+```
+add a unique constraint onto the assigned_uniqueid to ensure it remains unique
+```{sql, connection = con}
+ALTER TABLE sample ADD CONSTRAINT sample_assigned_uniqueid UNIQUE(assigned_uniqueid);
+```
+check size of exisiting table
+```{sql, connection = con}
+SELECT count(*) FROM sample;
+```
+
+
+Update the sample info making sure to match on sample id, sample code, and batch
+
+```{sql, connection = con}
+UPDATE sample
+SET
+barcode_pos = new_sample.barcode_pos, 
+chip = new_sample.chip,
+assigned_uniqueid = new_sample.assigned_uniqueid, 
+pheno_sampleid = new_sample.pheno_sampleid, 
+pheno_altid = new_sample.pheno_altid, 
+pheno_study = new_sample.pheno_study, 
+reported_sex = new_sample.reported_sex, 
+genetic_sex = new_sample.genetic_sex, 
+sex_mismatch = new_sample.sex_mismatch, 
+ancestry = new_sample.ancestry, 
+ethnicity = new_sample.ethnicity, 
+callrate = new_sample.callrate, 
+passed_gt_qc = new_sample.passed_gt_qc, 
+withdrawn = new_sample.withdrawn
+FROM new_sample
+WHERE sample.sampleid = new_sample.sampleid AND
+  sample.samplecode = new_sample.samplecode AND
+  sample.batchid = new_sample.batchid;
 
 ```
 
 
 
+```{sql, connection = con}
+ CREATE VIEW combined AS SELECT marker_info.name,
+    marker_info.chr,
+    marker_info."position",
+    sample.samplecode,
+    sample.reported_sex,
+    sample.genetic_sex,
+    sample.sex_mismatch,
+    sample.passed_gt_qc,
+    sample.ancestry,
+    sample.ethnicity,
+    sample.callrate,
+    sample.batchid,
+    sample.chip,
+    intensities.markername,
+    intensities.sampleid,
+    intensities.gtype,
+    intensities.x_raw,
+    intensities.x,
+    intensities.y_raw,
+    intensities.y,
+    intensities.r,
+    intensities.theta
+   FROM intensities
+     LEFT JOIN marker_info ON intensities.markername = marker_info.name
+     LEFT JOIN sample ON sample.sampleid = intensities.sampleid
+     LEFT JOIN batch ON sample.batchid = batch.batchid
+     WHERE NOT sample.withdrawn;
 ```
-sqlite3 gs_intensities.sqlite
-
-.mode csv
-.import intensities_batch_1.csv intensities
-.import intensities_batch_2.csv intensities
-```
-
 
 
 ------
