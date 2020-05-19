@@ -27,6 +27,10 @@ UsageCount=1
 N.B. the version number might differ so check the file exists first using `ls /usr/local/Cellar/psqlodbc/12.01.0000/lib/psqlodbcw.so`
 
 
+Reference websites:
+https://www.labkey.org/Documentation/wiki-page.view?name=odbcmac
+https://db.rstudio.com/getting-started/connect-to-database/
+
 ### R libraries
 
 ```
