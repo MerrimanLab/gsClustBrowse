@@ -10,6 +10,8 @@ There is also a R script in scripts that demonstrates how to access and query th
 
 ### Mac OS
 
+If you don't have homebrew install it by following the instructions at [https://brew.sh](https://brew.sh), it will let you follow the next steps.
+
 #### Database Drivers
 
 You need to install the unixodbc drivers for PostgreSQL. This can be done through homebrew `brew install psqlodbc`.
