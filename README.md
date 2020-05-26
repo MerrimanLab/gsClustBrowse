@@ -38,13 +38,13 @@ https://db.rstudio.com/getting-started/connect-to-database/
 ### R libraries
 
 ```
-install.packages(shiny)
-install.packages(DT)
-install.packages(tidyverse)
-install.packages(dbplyr)
-install.packages(DBI)
-install.packages(odbc)
-install.packages(config)
+install.packages('shiny')
+install.packages('DT')
+install.packages('tidyverse')
+install.packages('dbplyr')
+install.packages('DBI')
+install.packages('odbc')
+install.packages('config')
 ```
 
 ### Create a config file
