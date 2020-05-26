@@ -5,10 +5,10 @@ library(odbc)
 library(config)
 
 
-#' get database configuration info from the config.yml file
-dsn <- get("gsint")
-#' connect to the database
-con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database , timeout = 10)
+# get database configuration info from the config.yml file
+dsn <- get("psql_ro")
+# connect to the database
+con <- dbConnect(odbc::odbc(),driver = dsn$driver, database = dsn$database, servername = dsn$server, port = dsn$port, UID = dsn$user, PWD = dsn$password , timeout = 100)
 
 #' combined is a database view that has the table joins already specified
 combined_tbl <- tbl(con, "combined")
