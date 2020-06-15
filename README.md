@@ -35,6 +35,11 @@ https://www.labkey.org/Documentation/wiki-page.view?name=odbcmac
 
 https://db.rstudio.com/getting-started/connect-to-database/
 
+## Download/clone the repo
+
+
+Download/clone the repo locally.
+
 ### R libraries
 
 ```
@@ -49,7 +54,7 @@ install.packages('config')
 
 ### Create a config file
 
-In the project root you will need a file called `config.yml` which is used to supply the database connection information.
+In the project/repo root you will need a file called `config.yml` which is used to supply the database connection information.
 
 It look like the following:
 ```
