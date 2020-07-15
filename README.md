@@ -50,13 +50,16 @@ install.packages('dbplyr')
 install.packages('DBI')
 install.packages('odbc')
 install.packages('config')
+install.packages('shinythemes')
+install.packages('ggrepel')
+install.packages('RColorBrewer')
 ```
 
 ### Create a config file
 
 In the project/repo root you will need a file called `config.yml` which is used to supply the database connection information.
 
-It look like the following:
+It should look like the following:
 ```
 default:
   psql_ro:
