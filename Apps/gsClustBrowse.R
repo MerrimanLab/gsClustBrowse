@@ -8,6 +8,7 @@
 #
 
 library(shiny)
+library(shinythemes)
 library(DT)
 library(tidyverse)
 library(dbplyr)
@@ -45,7 +46,7 @@ onStop(function() {
 
 # Define UI for application that draws a histogram
 ui <- fluidPage(
-
+    theme = shinytheme("flatly"),
     # Application title
     titlePanel("Browse Intensities"),
     sidebarPanel(
