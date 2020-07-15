@@ -4,11 +4,14 @@
 #
 
 
+# original code from App https://github.com/MerrimanLab/PCAplotting
+# Made by Ruth Topless, adapted by Murray Cadzow
+
 library(shiny)
 library(shinythemes)
 library(utils)
 library(ggrepel) # label points
-
+library(RColorBrewer)
 library(tidyverse)
 library(dbplyr)
 library(DBI)
@@ -28,9 +31,13 @@ con <- dbConnect(odbc::odbc(),
                  timeout = 100)
 
 
-PCAtestdata <- tbl(con, "sample") %>% select(samplecode, ends_with("id"),contains("ethnicity"), contains("ancestry"), starts_with("pc")) %>% collect()
+ggplot2::theme_set(theme_bw())
+
+PCAglobal <- tbl(con, "sample") %>% filter(!withdrawn) %>% select(samplecode, ends_with("id"),contains("ethnicity"), contains("ancestry"), starts_with("pc")) %>% collect()
 PCAlist <- c("pc1", "pc2", "pc3", "pc4", "pc5", "pc6", "pc7", "pc8", "pc9", "pc10")
-ethnicspecific <- c("African", "East Asian", "Southeast Asian", "East or Southeast Asian", "South Asian", "European", "Hispanic", "Melanesian", "East Polynesian",  "West Polynesian", "Niuean", "Pukapukan", "Polynesian", "Unspecified")
+ancestrybroad <- unique(PCAglobal$ancestry_broad)
+ancestrybroad_colours <- RColorBrewer::brewer.pal(length(ancestrybroad), "Set1")
+names(ancestrybroad_colours) <- ancestrybroad
 
 
 ##################################
@@ -43,8 +50,8 @@ ui = fluidPage(
     fluidRow(
       column(width = 4,
              selectInput('xcol', 'X Variable Plot1', PCAlist),
-             selectInput('ycol', 'Y Variable Plot1', PCAlist, selected=PCAlist[2]),
-             selectInput('ethnicclass', 'Choose ethnic groups to include', choices = ethnicspecific, multiple = TRUE ),
+             selectInput('ycol', 'Y Variable Plot1', PCAlist, selected = PCAlist[2]),
+             selectInput('ancestryclass', 'Choose ancestral groups to include', choices = names(ancestrybroad), multiple = TRUE ),
 
              hr(),
              textInput("highlight_subjects", "Type in subject IDs to highlight on plot (comma separated)")
@@ -115,31 +122,18 @@ server <- function(input, output, session) {
 
 
   # define the colour scale to be used for plotting
-  eth_col_scale <- scale_colour_manual(values = c("African" = "#F8766D",
-                                                  "East Asian" = "#619CFF",
-                                                  "Southeast Asian" = "#00B0F6",
-                                                  "East or Southeast Asian" = "#1565C0",
-                                                  "South Asian" = "#E58700",
-                                                  "European" = "#00BA38",
-                                                  "Hispanic" = "#009966",
-                                                  "Melanesian" = "#6C2DC7",
-                                                  "East Polynesian" = "#E9B000",
-                                                  "West Polynesian" = "#B983FF",
-                                                  "Niuean" = "#FF67A4",
-                                                  "Pukapukan" = "#E76BF3",
-                                                  "Polynesian" = "#00C0AF",
-                                                  "Unspecified" = "#999999"),
-                                       name = "Ethnicities"
+  ancs_col_scale <- scale_colour_manual(values = ancestrybroad_colours,
+                                       name = "Ancestries (Broad)"
   )
 
   # Combine the selected variables into a new data frame
   selectedData <- reactive({
-    eth <- input$ethnicclass
-    if (is.null(eth)) eth <- ethnicspecific
+    ancs <- input$ancestryclass
+    if (is.null(ancs)) ancs <- ancestrybroad
 
-    PCAtestdata %>%
-      select(assigned_uniqueid, ethnicity_specific, !!input$xcol, !!input$ycol, ancestry_broad, ancestry_specific) %>%
-      filter(ancestry_specific %in% eth)
+    PCAglobal %>%
+      select(assigned_uniqueid, ethnicity_specific, ethnicity_broad, !!input$xcol, !!input$ycol, ancestry_broad, ancestry_specific) %>%
+      filter(ancestry_broad %in% ancs)
 
   })
 
@@ -149,8 +143,8 @@ server <- function(input, output, session) {
     subjectlist <- as.data.frame(strsplit(subj, ","))
     colnames(subjectlist)[1] <- "assigned_uniqueid"
 
-    PCAtestdata %>%
-      select(assigned_uniqueid, ethnicity_specific, !!input$xcol, !!input$ycol, ancestry_specific) %>%
+    PCAglobal %>%
+      select(assigned_uniqueid, ethnicity_specific, ethnicity_broad, !!input$xcol, !!input$ycol, ancestry_specific) %>%
       filter(assigned_uniqueid %in% subjectlist$assigned_uniqueid)
 
   })
@@ -169,13 +163,13 @@ server <- function(input, output, session) {
     highlight <- dat %>% filter(assigned_uniqueid %in% subjectlist$assigned_uniqueid)
 
     dat %>%
-      ggplot(., aes(x = xcol, y = ycol, colour = ancestry_specific)) +
+      ggplot(., aes(x = xcol, y = ycol, colour = ancestry_broad)) +
       geom_point() +
-      eth_col_scale + # the colour scale defined further up
+      ancs_col_scale + # the colour scale defined further up
       xlab(input$xcol) +
       ylab(input$ycol) +
-      ylim(c(min(PCAtestdata[, input$ycol]), max(PCAtestdata[, input$ycol]) )) +
-      xlim(c(min(PCAtestdata[, input$xcol]), max(PCAtestdata[, input$xcol]) )) +
+      ylim(c(min(PCAglobal[, input$ycol]), max(PCAglobal[, input$ycol]) )) +
+      xlim(c(min(PCAglobal[, input$xcol]), max(PCAglobal[, input$xcol]) )) +
       theme(legend.position = 'bottom',
             legend.text = element_text(size = rel(1.5)),
             legend.title = element_text(size = rel(1.7))) +
@@ -201,13 +195,13 @@ server <- function(input, output, session) {
 
   output$click_info <- renderTable({
     dat <- selectedData()
-    nearPoints(dat[,c("assigned_uniqueid",input$xcol,input$ycol,"ethnicity_specific","ancestry_broad","ancestry_specific")], input$plot1_click, xvar = input$xcol, yvar = input$ycol, addDist = FALSE)},
+    nearPoints(dat[,c("assigned_uniqueid",input$xcol,input$ycol,"ethnicity_specific", "ethnicity_broad","ancestry_broad","ancestry_specific")], input$plot1_click, xvar = input$xcol, yvar = input$ycol, addDist = FALSE)},
     bordered = TRUE
   )
 
   plot1brushselected <- reactive({
     dat <- selectedData()
-    brushedPoints(dat[,c("assigned_uniqueid",input$xcol,input$ycol, "ethnicity_specific","ancestry_broad","ancestry_specific")], input$plot1_brush, xvar = input$xcol, yvar = input$ycol)})
+    brushedPoints(dat[,c("assigned_uniqueid",input$xcol,input$ycol, "ethnicity_specific", "ethnicity_broad","ancestry_broad","ancestry_specific")], input$plot1_brush, xvar = input$xcol, yvar = input$ycol)})
 
   output$brush_info <- renderDataTable({plot1brushselected()},
                                        #options = list(lengthMenu = list(c(10, 25, 50, -1), c('10','25','50','All')), pageLength = 10, autoWidth=FALSE)
@@ -219,7 +213,7 @@ server <- function(input, output, session) {
     dat <- selectedData()
     dat2 <- PCAtestdata %>% filter(assigned_uniqueid %in% dat$assigned_uniqueid)
     return(
-      brushedPoints(dat2[,c("assigned_uniqueid",input$xcol,input$ycol,input$xcol2,input$ycol2, "ethnicity_specific","ancestry_broad","ancestry_specific")],
+      brushedPoints(dat2[,c("assigned_uniqueid",input$xcol,input$ycol,input$xcol2,input$ycol2, "ethnicity_specific", "ethnicity_broad","ancestry_broad","ancestry_specific")],
                     input$plot1_brush,
                     xvar = input$xcol,
                     yvar = input$ycol))
@@ -232,11 +226,11 @@ server <- function(input, output, session) {
     colnames(subjectlist)[1] <- "assigned_uniqueid"
     highlight <- dat3 %>% filter(assigned_uniqueid %in% subjectlist$assigned_uniqueid)
     dat3 %>%
-      ggplot(., aes(x = xcol, y = ycol, colour = ancestry_specific) ) +
+      ggplot(., aes(x = xcol, y = ycol, colour = ancestry_broad) ) +
       geom_point() +
       xlab(input$xcol2) +
       ylab(input$ycol2) +
-      eth_col_scale +
+      ancs_col_scale +
       ylim(c(min(PCAtestdata[, input$ycol2]), max(PCAtestdata[, input$ycol2]) )) +
       xlim(c(min(PCAtestdata[, input$xcol2]), max(PCAtestdata[, input$xcol2]) )) +
       theme(legend.position = 'right',
@@ -266,7 +260,7 @@ server <- function(input, output, session) {
 
   output$click_info2 <- renderTable({
     dat3 <- plot1brushselected2()
-    nearPoints(dat3[,c("assigned_uniqueid",input$xcol2,input$ycol2,"ethnicity_specific","ancestry_broad","ancestry_specific")],
+    nearPoints(dat3[,c("assigned_uniqueid",input$xcol2,input$ycol2,"ethnicity_specific", "ethnicity_broad","ancestry_broad","ancestry_specific")],
                input$plot2_click,
                xvar = input$xcol2,
                yvar = input$ycol2,
@@ -275,7 +269,7 @@ server <- function(input, output, session) {
 
   plot2brushselected <- reactive({
     dat3 <- plot1brushselected2()
-    brushedPoints(dat3[,c("assigned_uniqueid",input$xcol2,input$ycol2,"ethnicity_specific","ancestry_broad","ancestry_specific")],
+    brushedPoints(dat3[,c("assigned_uniqueid",input$xcol2,input$ycol2,"ethnicity_specific", "ethnicity_broad","ancestry_broad","ancestry_specific")],
                   input$plot2_brush,
                   xvar = input$xcol2,
                   yvar = input$ycol2)
