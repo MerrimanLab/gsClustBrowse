@@ -9,7 +9,7 @@
 
 library(shiny)
 library(shinythemes)
-library(utils)
+#library(utils)
 library(ggrepel) # label points
 library(RColorBrewer)
 library(tidyverse)
@@ -48,10 +48,10 @@ ui = fluidPage(
   headerPanel(h1('PCA clustering', align = "center")),
   sidebarPanel(
     fluidRow(
-      column(width = 4,
+      column(width = 8,
              selectInput('xcol', 'X Variable Plot1', PCAlist),
              selectInput('ycol', 'Y Variable Plot1', PCAlist, selected = PCAlist[2]),
-             selectInput('ancestryclass', 'Choose ancestral groups to include', choices = names(ancestrybroad), multiple = TRUE ),
+             selectInput('ancestryclass', 'Choose ancestral groups to include', choices = ancestrybroad, multiple = TRUE ),
 
              hr(),
              textInput("highlight_subjects", "Type in subject IDs to highlight on plot (comma separated)")
@@ -139,13 +139,11 @@ server <- function(input, output, session) {
 
 
   highlight_sub <- reactive({
-    subj <- gsub(pattern = " ", replacement = "", input$highlight_subjects)
-    subjectlist <- as.data.frame(strsplit(subj, ","))
-    colnames(subjectlist)[1] <- "assigned_uniqueid"
+    subj <- str_remove_all(input$highlight_subjects, pattern = "[:whitespace:]") %>% str_split(pattern = ",") %>% unlist()
 
     PCAglobal %>%
       select(assigned_uniqueid, ethnicity_specific, ethnicity_broad, !!input$xcol, !!input$ycol, ancestry_specific) %>%
-      filter(assigned_uniqueid %in% subjectlist$assigned_uniqueid)
+      filter(assigned_uniqueid %in% subj)
 
   })
 
@@ -154,13 +152,9 @@ server <- function(input, output, session) {
   plotInput <- reactive({
     dat <- selectedData() %>% rename(xcol = input$xcol, ycol = input$ycol)
 
-    subj <- gsub(pattern = " ", replacement = "", input$highlight_subjects)
+    subj <- str_remove_all(input$highlight_subjects, pattern = "[:whitespace:]") %>% str_split(pattern = ",") %>% unlist()
 
-    subjectlist <- as.data.frame(strsplit(subj, ","))
-
-    colnames(subjectlist)[1] <- "assigned_uniqueid"
-
-    highlight <- dat %>% filter(assigned_uniqueid %in% subjectlist$assigned_uniqueid)
+    highlight <- dat %>% filter(assigned_uniqueid %in% subj)
 
     dat %>%
       ggplot(., aes(x = xcol, y = ycol, colour = ancestry_broad)) +
