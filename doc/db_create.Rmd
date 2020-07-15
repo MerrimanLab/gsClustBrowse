@@ -335,10 +335,10 @@ psql -d gsclusbrowse -c "\copy intensities from 'intensities_batch_8_NA_removed.
 Update sample table:
 
 ```{r}
-sample_table <-dbReadTable(con,"sample")
-sample_info <- read_tsv(here("data/CZ-MB1.2-QC1.10_MergedPhenotypes_05032020.txt"), guess = 10000)
+sample_table <- dbReadTable(con,"sample")
+sample_info <- read_tsv(here("data/CZ-MB1.2-QC1.10_MergedPhenotypes_30062020.txt"), guess = 20000)
 
-sample_info_to_join <- sample_info %>% select(UniqueID, Pheno.SampleID, Pheno.AlternateID, Pheno.Study, Pheno.Gender, Pheno.Ethnicity, Pheno.BroadEthnicity, Pheno.SpecificEthnicity, Pheno.EthnicityGroup, Pheno.PolynesianGroup, Pheno.Withdrawn, starts_with("GenStudio"), Geno.GeneticSex, contains("Ancestry"), Geno.PolynesianGroupPC) %>%
+sample_info_to_join <- sample_info %>% select(UniqueID, Pheno.SampleID, Pheno.AlternateID, Pheno.Study, Pheno.Gender, Pheno.Ethnicity, Pheno.BroadEthnicity, Pheno.SpecificEthnicity, Pheno.EthnicityGroup, Pheno.PolynesianGroup, Pheno.Withdrawn, starts_with("GenStudio"), Geno.GeneticSex, contains("Ancestry"), contains("PCVector"), Geno.SpecificAncestry, Geno.BroadAncestry, Geno.AncestryMatch, General.Use) %>%
   unite("barcode_pos", GenStudio.ChipBarcode, GenStudio.ChipPosition, sep = "_") %>% 
   mutate(batchid = as.numeric(str_remove(GenStudio.QCBatch, "QC"))) %>% 
   select(GenStudio.SampleID, GenStudio.AlternateID, UniqueID, GenStudio.barcode_pos = barcode_pos, everything())
@@ -350,46 +350,85 @@ withdrawn_ids <- sample_info %>% filter(Pheno.Withdrawn == "Yes") %>% select(Uni
 to_update_pheno <- left_join(sample_table, sample_info_to_join, by = c("samplecode" = "GenStudio.SampleID", "batchid")) %>% select(batchid, sampleid, everything()) %>% filter(!samplecode %in% c(withdrawn_ids$Pheno.SampleID, withdrawn_ids$Pheno.AlternateID)) %>% 
   mutate(withdrawn = FALSE,
          barcode = case_when(is.na(barcode_pos) | barcode_pos != GenStudio.barcode_pos ~ GenStudio.barcode_pos,
-                             TRUE ~ barcode_pos), # fill in missing barcode positions if possible and use the newer barcode_pos if conficted
+                             TRUE ~ barcode_pos), # fill in missing barcode positions if possible and use the newer barcode_pos if conflicted
          reported_sex = ifelse(is.na(reported_sex), Pheno.Gender, reported_sex),
-         ancestry = Geno.AncestryGroupPC,
-         callrate = GenStudio.CallRate,
          passed_gt_qc = if_else(GenStudio.Excluded == "No", TRUE, FALSE, NA),
-         ethnicity = Pheno.EthnicityGroup
+         ethnicity_ancestry_mismatch_issues = if_else(Geno.AncestryMatch %in% 
+                                                        c("Unable to assign genetic ancestry",
+                                                          "Self-reported ethnicity has no equivalent genetic ancestry grouping (American or Alaskan Native)",
+                                                          "Self-reported ethnicity does not match genetic ancestry"
+         ), TRUE, FALSE, NA),
+         general_use = str_replace(General.Use, "Maybe - Check", "Check")
          )
 
 # check there isn't a duplication of barcode ids (that aren't NA)
-sum(!is.na((to_update_pheno$barcode_pos[duplicated(to_update_pheno$barcode_pos)]))) == 0
+testthat::expect_equal(sum(!is.na((to_update_pheno$barcode_pos[duplicated(to_update_pheno$barcode_pos)]))), 0)
 
 # check for mismatches in barcode ids
 to_update_pheno %>% filter(barcode_pos != GenStudio.barcode_pos)
 
 
 to_remove <- sample_table %>% filter(samplecode %in% c(withdrawn_ids$Pheno.SampleID, withdrawn_ids$Pheno.AlternateID)) %>% 
-  mutate(withdrawn =  TRUE, passed_gt_qc = as.logical(passed_gt_qc))
+  mutate(withdrawn =  TRUE, passed_gt_qc = NA)
 
 # check we table size will end up the same
-nrow(sample_table) - nrow(to_update_pheno) - nrow(to_remove) == 0
+testthat::expect_equal(nrow(sample_table) - nrow(to_update_pheno) - nrow(to_remove), 0)
 # check there is no duplication of ids
-sum(duplicated(c(to_update_pheno$sampleid, to_remove$sampleid))) == 0
+testthat::expect_equal(sum(duplicated(c(to_update_pheno$sampleid, to_remove$sampleid))), 0)
   
 new_sample_table <- bind_rows(to_update_pheno, to_remove) %>% mutate(sex_mismatch = !reported_sex == genetic_sex, batchid = as.integer(batchid)) %>% 
-  select(sampleid, samplecode, batchid, barcode_pos, chip = GenStudio.ChipType, assigned_uniqueid = UniqueID, pheno_sampleid = Pheno.SampleID, pheno_altid = Pheno.AlternateID, pheno_study = Pheno.Study, reported_sex, genetic_sex, sex_mismatch, ancestry, ethnicity, callrate, passed_gt_qc, withdrawn)
+  select(sampleid, 
+         samplecode, 
+         batchid, 
+         barcode_pos,
+         general_use,
+         withdrawn, 
+         chip = GenStudio.ChipType, 
+         assigned_uniqueid = UniqueID, 
+         pheno_sampleid = Pheno.SampleID, 
+         pheno_altid = Pheno.AlternateID,
+         pheno_study = Pheno.Study, 
+         reported_sex, 
+         genetic_sex, 
+         sex_mismatch, 
+         ethnicity = Pheno.Ethnicity,
+         ethnicity_specific = Pheno.SpecificEthnicity,
+         ethnicity_broad = Pheno.BroadEthnicity,
+         ethnicity_group = Pheno.EthnicityGroup,
+         callrate = GenStudio.CallRate, 
+         passed_gt_qc, 
+         ancestry_specific = Geno.SpecificAncestry,
+         ancestry_broad = Geno.BroadAncestry,
+         ethnicity_ancestry_mismatch_issues,
+         pc1 = Geno.PCVector1, 
+         pc2 = Geno.PCVector2, 
+         pc3 = Geno.PCVector3, 
+         pc4 = Geno.PCVector4, 
+         pc5 = Geno.PCVector5, 
+         pc6 = Geno.PCVector6,
+         pc7 = Geno.PCVector7,
+         pc8 = Geno.PCVector8,
+         pc9 = Geno.PCVector9,
+         pc10 = Geno.PCVector10)
 
 # check for spellings
-table(new_sample_table$batchid)
-table(new_sample_table$ethnicity)
-table(new_sample_table$ancestry)
-table(new_sample_table$chip)
-table(new_sample_table$pheno_study)
-table(new_sample_table$reported_sex)
-table(new_sample_table$genetic_sex)
-table(new_sample_table$passed_gt_qc)
-table(new_sample_table$withdrawn)
+table(new_sample_table$batchid, exclude = NULL)
+table(new_sample_table$ethnicity, exclude = NULL)
+table(new_sample_table$ethnicity_specific, exclude = NULL)
+table(new_sample_table$ethnicity_broad, exclude = NULL)
+table(new_sample_table$ancestry_specific, exclude = NULL)
+table(new_sample_table$ancestry_broad, exclude = NULL)
+table(new_sample_table$ethnicity_ancestry_mismatch_issues, exclude = NULL)
+table(new_sample_table$chip, exclude = NULL)
+table(new_sample_table$pheno_study, exclude = NULL)
+table(new_sample_table$reported_sex, exclude = NULL)
+table(new_sample_table$genetic_sex, exclude = NULL)
+table(new_sample_table$passed_gt_qc, exclude = NULL)
+table(new_sample_table$withdrawn, exclude = NULL)
 
 write_csv(new_sample_table, here("data/new_sample_table.csv"))
 
-dbWriteTable(con, "new_sample", new_sample_table)
+dbWriteTable(con, "new_sample_july2020", new_sample_table)
 ```
 
 remove the old view
@@ -399,10 +438,20 @@ DROP VIEW combined;
 
 alter the original sample table to get rid of the existing data
 ```{sql, connection = con}
-ALTER TABLE sample DROP COLUMN ancestry, DROP COLUMN reported_sex, DROP COLUMN genetic_sex, DROP COLUMN barcode_pos, DROP COLUMN callrate, DROP COLUMN passed_gt_qc;
+ALTER TABLE sample 
+  DROP COLUMN ancestry, 
+  DROP COLUMN reported_sex, 
+  DROP COLUMN genetic_sex, 
+  DROP COLUMN barcode_pos,
+  DROP COLUMN callrate, 
+  DROP COLUMN passed_gt_qc;
 ```
+
+
 recreate the old columns plus the new ones
-```{sql, connection = con}
+```{sql, connection = con, eval = FALSE}
+--- this was done for the first update
+--- don't use
 ALTER TABLE sample 
   ADD COLUMN barcode_pos TEXT,
   ADD COLUMN chip TEXT,
@@ -419,11 +468,75 @@ ALTER TABLE sample
   ADD COLUMN passed_gt_qc BOOLEAN,
   ADD COLUMN withdrawn BOOLEAN;
 ```
+
+
+For the July 2020 update of the update
+```{sql, connection = con}
+--- this updated the updated sample table
+--- some of these columns didn't exist on the original creation of the table
+ ALTER TABLE sample 
+  DROP COLUMN barcode_pos,
+  DROP COLUMN chip,
+  DROP COLUMN assigned_uniqueid,
+  DROP COLUMN pheno_sampleid,
+  DROP COLUMN pheno_altid,
+  DROP COLUMN pheno_study,
+  DROP COLUMN reported_sex,
+  DROP COLUMN genetic_sex,
+  DROP COLUMN sex_mismatch,
+  DROP COLUMN ancestry,
+  DROP COLUMN ethnicity, 
+  DROP COLUMN callrate,
+  DROP COLUMN passed_gt_qc,
+  DROP COLUMN withdrawn;
+```
+
+
+
+```{sql, connection = con}
+ALTER TABLE sample
+        ADD COLUMN barcode_pos TEXT, 
+        ADD COLUMN withdrawn BOOLEAN,
+        ADD COLUMN chip TEXT, 
+        ADD COLUMN assigned_uniqueid TEXT, 
+        ADD COLUMN pheno_sampleid TEXT, 
+        ADD COLUMN pheno_altid TEXT,
+        ADD COLUMN pheno_study TEXT, 
+        ADD COLUMN reported_sex TEXT, 
+        ADD COLUMN genetic_sex TEXT, 
+        ADD COLUMN sex_mismatch BOOLEAN, 
+        ADD COLUMN ethnicity TEXT,
+        ADD COLUMN ethnicity_specific TEXT,
+        ADD COLUMN ethnicity_broad TEXT,
+        ADD COLUMN ethnicity_group TEXT,
+        ADD COLUMN callrate REAL, 
+        ADD COLUMN passed_gt_qc BOOLEAN, 
+        ADD COLUMN ancestry_specific TEXT,
+        ADD COLUMN ancestry_broad TEXT,
+        ADD COLUMN ethnicity_ancestry_mismatch_issues BOOLEAN,
+        ADD COLUMN pc1 REAL, 
+        ADD COLUMN pc2 REAL, 
+        ADD COLUMN pc3 REAL, 
+        ADD COLUMN pc4 REAL, 
+        ADD COLUMN pc5 REAL, 
+        ADD COLUMN pc6 REAL,
+        ADD COLUMN pc7 REAL,
+        ADD COLUMN pc8 REAL,
+        ADD COLUMN pc9 REAL,
+        ADD COLUMN pc10 REAL,
+        ADD COLUMN general_use TEXT;
+```
+
+
+
+
+
 add a unique constraint onto the assigned_uniqueid to ensure it remains unique
 ```{sql, connection = con}
 ALTER TABLE sample ADD CONSTRAINT sample_assigned_uniqueid UNIQUE(assigned_uniqueid);
 ```
-check size of exisiting table
+
+check size of existing table
 ```{sql, connection = con}
 SELECT count(*) FROM sample;
 ```
@@ -455,6 +568,44 @@ WHERE sample.sampleid = new_sample.sampleid AND
 
 ```
 
+```{sql, connection = con}
+UPDATE sample
+SET
+  barcode_pos = new_sample_july2020.barcode_pos, 
+  withdrawn = new_sample_july2020.withdrawn, 
+  chip = new_sample_july2020.chip, 
+  assigned_uniqueid = new_sample_july2020.assigned_uniqueid, 
+  pheno_sampleid = new_sample_july2020.pheno_sampleid, 
+  pheno_altid = new_sample_july2020.pheno_altid,
+  pheno_study = new_sample_july2020.pheno_study, 
+  reported_sex = new_sample_july2020.reported_sex, 
+  genetic_sex = new_sample_july2020.genetic_sex, 
+  sex_mismatch = new_sample_july2020.sex_mismatch, 
+  ethnicity = new_sample_july2020.ethnicity,
+  ethnicity_specific = new_sample_july2020.ethnicity_specific,
+  ethnicity_broad = new_sample_july2020.ethnicity_broad,
+  ethnicity_group = new_sample_july2020.ethnicity_group,
+  callrate = new_sample_july2020.callrate, 
+  passed_gt_qc = new_sample_july2020.passed_gt_qc, 
+  ancestry_specific = new_sample_july2020.ancestry_specific,
+  ancestry_broad = new_sample_july2020.ancestry_broad,
+  ethnicity_ancestry_mismatch_issues = new_sample_july2020.ethnicity_ancestry_mismatch_issues,
+  pc1 = new_sample_july2020.pc1, 
+  pc2 = new_sample_july2020.pc2, 
+  pc3 = new_sample_july2020.pc3, 
+  pc4 = new_sample_july2020.pc4, 
+  pc5 = new_sample_july2020.pc5, 
+  pc6 = new_sample_july2020.pc6,
+  pc7 = new_sample_july2020.pc7,
+  pc8 = new_sample_july2020.pc8,
+  pc9 = new_sample_july2020.pc9,
+  pc10 = new_sample_july2020.pc10,
+  general_use = new_sample_july2020.general_use
+FROM new_sample_july2020
+WHERE sample.sampleid = new_sample_july2020.sampleid AND
+  sample.samplecode = new_sample_july2020.samplecode AND
+  sample.batchid = new_sample_july2020.batchid;
+```
 
 
 ```{sql, connection = con}
@@ -466,8 +617,10 @@ WHERE sample.sampleid = new_sample.sampleid AND
     sample.genetic_sex,
     sample.sex_mismatch,
     sample.passed_gt_qc,
-    sample.ancestry,
-    sample.ethnicity,
+    sample.ancestry_specific,
+    sample.ancestry_broad,
+    sample.ethnicity_specific,
+    sample.ethnicity_broad,
     sample.callrate,
     sample.batchid,
     sample.chip,
@@ -486,6 +639,12 @@ WHERE sample.sampleid = new_sample.sampleid AND
      LEFT JOIN batch ON sample.batchid = batch.batchid
      WHERE NOT sample.withdrawn;
 ```
+
+Finally update the permissions for the combined table with:
+```{sql, eval = FALSE}
+GRANT SELECT ON combined TO <username>;
+```
+
 
 
 ------
